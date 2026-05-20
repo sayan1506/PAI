@@ -23,6 +23,17 @@ LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 AGENT_NAME: str = os.getenv("AGENT_NAME", "PAI")
 MAX_SESSION_TURNS: int = int(os.getenv("MAX_SESSION_TURNS", "20"))
 
+# ── Voice ─────────────────────────────────────────────────────
+WAKE_WORD: str = os.getenv("WAKE_WORD", "hey jarvis")
+WAKE_WORD_SENSITIVITY: float = float(os.getenv("WAKE_WORD_SENSITIVITY", "0.5"))
+STT_MODEL: str = os.getenv("STT_MODEL", "faster-whisper")
+STT_SIZE: str = os.getenv("STT_SIZE", "base")
+VOICE_ENABLED: bool = os.getenv("VOICE_ENABLED", "True").lower() in ("true", "1", "yes")
+VAD_SILENCE_MS: int = int(os.getenv("VAD_SILENCE_MS", "1200"))
+MIC_SAMPLE_RATE: int = int(os.getenv("MIC_SAMPLE_RATE", "16000"))
+MIC_CHANNELS: int = int(os.getenv("MIC_CHANNELS", "1"))
+MIC_DEVICE: str = os.getenv("MIC_DEVICE", "")  # device index or empty for default
+
 # Valid provider names for validation
 SUPPORTED_PROVIDERS: set = {"gemini", "ollama"}
 
