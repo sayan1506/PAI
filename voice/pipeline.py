@@ -82,6 +82,10 @@ class VoicePipeline:
                     text = self.stt.transcribe(audio)
                     if text:
                         on_transcription(text)
+                    # Flush mic buffer after processing to discard stale audio
+                    # that accumulated while the LLM was generating a response
+                    for _ in range(30):  # ~960ms flush
+                        self.mic.read()
                 except AudioError as e:
                     logger.error(f"Voice pipeline error: {e}")
                 except KeyboardInterrupt:

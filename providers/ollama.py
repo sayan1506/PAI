@@ -11,7 +11,7 @@ import requests
 import config
 from core.exceptions import ProviderError
 from core.logger import logger
-from providers.base import LLMProvider, LLMResponse, Message
+from providers.base import LLMProvider, LLMResponse, Message, ToolCall
 
 
 class OllamaProvider(LLMProvider):
@@ -30,6 +30,61 @@ class OllamaProvider(LLMProvider):
     def model_name(self) -> str:
         """Return the name of the configured Ollama model."""
         return self.model
+
+    def _build_messages(self, messages: list[Message]) -> list[dict]:
+        """Convert Message list to Ollama's chat format.
+
+        Handles three message types:
+        - user/assistant text messages
+        - assistant messages with tool_calls → includes tool_calls array
+        - tool result messages → role "tool" with content
+        """
+        ollama_messages = []
+        for msg in messages:
+            if msg.role == "assistant" and msg.tool_calls:
+                # Assistant requested tool calls
+                tool_calls = [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.name,
+                            "arguments": tc.arguments,
+                        },
+                    }
+                    for tc in msg.tool_calls
+                ]
+                ollama_messages.append({
+                    "role": "assistant",
+                    "content": msg.content or "",
+                    "tool_calls": tool_calls,
+                })
+            elif msg.role == "tool":
+                # Tool result
+                ollama_messages.append({
+                    "role": "tool",
+                    "content": msg.content,
+                })
+            else:
+                ollama_messages.append({
+                    "role": msg.role,
+                    "content": msg.content,
+                })
+        return ollama_messages
+
+    def _build_ollama_tools(self, tool_specs: list[dict]) -> list[dict]:
+        """Convert tool specs to Ollama's tool format (OpenAI-compatible)."""
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": spec["name"],
+                    "description": spec["description"],
+                    "parameters": spec["parameters"],
+                },
+            }
+            for spec in tool_specs
+        ]
 
     def generate(self, messages: list[Message]) -> LLMResponse:
         """Generate a response from Ollama given a list of messages.
@@ -74,6 +129,72 @@ class OllamaProvider(LLMProvider):
             )
         except Exception as e:
             raise ProviderError(f"Ollama error: {e}")
+
+    def generate_with_tools(
+        self,
+        messages: list[Message],
+        tools: list[dict],
+    ) -> LLMResponse:
+        """Generate a response with tool-calling support via Ollama.
+
+        Uses Ollama's /api/chat endpoint with the tools parameter.
+        Ollama supports OpenAI-compatible tool calling for models that
+        support it (llama3.1, gemma4, etc.).
+
+        Args:
+            messages: Full conversation history including any tool results.
+            tools: List of tool specs in JSON-Schema function format.
+
+        Returns:
+            LLMResponse with tool_calls populated if the LLM chose a tool.
+        """
+        try:
+            ollama_messages = self._build_messages(messages)
+            ollama_tools = self._build_ollama_tools(tools) if tools else None
+
+            payload = {
+                "model": self.model,
+                "messages": ollama_messages,
+                "stream": False,
+            }
+            if ollama_tools:
+                payload["tools"] = ollama_tools
+
+            logger.debug(f"Sending to Ollama with tools ({self.model})")
+            resp = requests.post(
+                f"{self.base_url}/api/chat",
+                json=payload,
+                timeout=120,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            message = data.get("message", {})
+            content = message.get("content", "")
+
+            # Parse tool calls from response
+            tool_calls = []
+            raw_tool_calls = message.get("tool_calls", [])
+            for i, tc in enumerate(raw_tool_calls):
+                func = tc.get("function", {})
+                tool_calls.append(ToolCall(
+                    id=func.get("name", f"call_{i}"),
+                    name=func.get("name", ""),
+                    arguments=func.get("arguments", {}),
+                ))
+
+            return LLMResponse(
+                content=content,
+                tool_calls=tool_calls,
+                metadata={"model": self.model},
+            )
+        except requests.exceptions.ConnectionError:
+            raise ProviderError(
+                f"Cannot connect to Ollama at {self.base_url}. "
+                "Is Ollama running? Start it with: ollama serve"
+            )
+        except Exception as e:
+            raise ProviderError(f"Ollama tool call error: {e}")
 
     def health_check(self) -> bool:
         """Verify Ollama is reachable by hitting the /api/tags endpoint."""

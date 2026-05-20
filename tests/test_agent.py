@@ -20,7 +20,9 @@ def make_mock_provider(response_content: str) -> LLMProvider:
     """Create a mock LLMProvider that returns a controlled response."""
     provider = MagicMock(spec=LLMProvider)
     provider.model_name = "mock-model"
-    provider.generate.return_value = LLMResponse(content=response_content)
+    response = LLMResponse(content=response_content)
+    provider.generate.return_value = response
+    provider.generate_with_tools.return_value = response
     return provider
 
 

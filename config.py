@@ -34,6 +34,17 @@ MIC_SAMPLE_RATE: int = int(os.getenv("MIC_SAMPLE_RATE", "16000"))
 MIC_CHANNELS: int = int(os.getenv("MIC_CHANNELS", "1"))
 MIC_DEVICE: str = os.getenv("MIC_DEVICE", "")  # device index or empty for default
 
+# ── Tools ─────────────────────────────────────────────────────
+ENABLE_FILE_OPS: bool = os.getenv("ENABLE_FILE_OPS", "True").lower() in ("true", "1", "yes")
+ENABLE_APP_LAUNCHER: bool = os.getenv("ENABLE_APP_LAUNCHER", "True").lower() in ("true", "1", "yes")
+ENABLE_TERMINAL: bool = os.getenv("ENABLE_TERMINAL", "False").lower() in ("true", "1", "yes")
+ENABLE_BROWSER: bool = os.getenv("ENABLE_BROWSER", "True").lower() in ("true", "1", "yes")
+ENABLE_SCREEN_READER: bool = os.getenv("ENABLE_SCREEN_READER", "True").lower() in ("true", "1", "yes")
+MAX_TOOL_ITERATIONS: int = int(os.getenv("MAX_TOOL_ITERATIONS", "5"))
+
+# ── Platform ──────────────────────────────────────────────────
+SCREEN_SCALE_FACTOR: float = float(os.getenv("SCREEN_SCALE_FACTOR", "1.0"))
+
 # Valid provider names for validation
 SUPPORTED_PROVIDERS: set = {"gemini", "ollama"}
 
@@ -56,4 +67,11 @@ def validate_config() -> None:
         raise ConfigError(
             "GEMINI_API_KEY is required when LLM_PROVIDER is set to 'gemini'. "
             "Set it in your .env file or environment variables."
+        )
+
+    if ENABLE_TERMINAL:
+        from core.logger import logger
+        logger.warning(
+            "ENABLE_TERMINAL is ON. Shell commands will be executed. "
+            "Ensure you trust all inputs reaching the agent."
         )

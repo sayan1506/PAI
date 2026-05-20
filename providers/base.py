@@ -10,16 +10,35 @@ from abc import ABC, abstractmethod
 
 
 @dataclass
+class ToolCall:
+    """Represents a single tool invocation requested by the LLM.
+
+    Attributes:
+        id: Provider-assigned ID (used to match results).
+        name: Tool name (must match BaseTool.name).
+        arguments: Parsed argument dict.
+    """
+
+    id: str
+    name: str
+    arguments: dict
+
+
+@dataclass
 class Message:
     """Represents a single message in a conversation.
 
     Attributes:
-        role: The role of the message sender ("user", "assistant", or "system").
+        role: The role of the message sender ("user", "assistant", "tool").
         content: The text content of the message.
+        tool_calls: List of tool calls (populated when role is "assistant" and LLM requests tools).
+        tool_call_id: ID matching a tool call (populated when role is "tool").
     """
 
     role: str
     content: str
+    tool_calls: list[ToolCall] = field(default_factory=list)
+    tool_call_id: str = ""
 
 
 @dataclass
@@ -28,10 +47,12 @@ class LLMResponse:
 
     Attributes:
         content: The generated text response.
+        tool_calls: List of tool calls requested by the LLM (empty if text-only response).
         metadata: Provider-specific metadata (model, tokens, etc).
     """
 
     content: str
+    tool_calls: list[ToolCall] = field(default_factory=list)
     metadata: dict = field(default_factory=dict)
 
 
@@ -62,6 +83,26 @@ class LLMProvider(ABC):
             ProviderError: If the LLM API call fails.
         """
         ...
+
+    def generate_with_tools(
+        self,
+        messages: list[Message],
+        tools: list[dict],
+    ) -> LLMResponse:
+        """Generate a response with tool-calling support.
+
+        Default implementation ignores tools and falls back to generate().
+        Override in providers that support native function calling.
+
+        Args:
+            messages: Full conversation history including any tool results.
+            tools: List of tool specs in JSON-Schema function format.
+
+        Returns:
+            LLMResponse. If the LLM chose a tool, response.tool_calls is
+            populated and response.content may be empty.
+        """
+        return self.generate(messages)
 
     @abstractmethod
     def health_check(self) -> bool:

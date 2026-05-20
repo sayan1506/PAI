@@ -2,18 +2,38 @@
 PAI Agent Core
 
 The Agent manages multi-turn conversation state, delegates to an LLM provider
-for response generation, and handles history trimming and error recovery.
+for response generation, executes tool calls in a loop, and handles history
+trimming and error recovery.
 """
 
-from providers.base import LLMProvider, Message, LLMResponse
+from tools import get_tools, dispatch
+from providers.base import LLMProvider, Message, LLMResponse, ToolCall
+from core.exceptions import ProviderError, RateLimitError, ToolError
 from core.logger import logger
-from core.exceptions import ProviderError, RateLimitError
 import config
 
 SYSTEM_PROMPT = f"""You are {config.AGENT_NAME}, a personal AI assistant running locally on the user's computer.
 You are helpful, concise, and direct. You do not add unnecessary filler phrases.
 When you don't know something, say so clearly.
-In later versions you will have tools to control the computer — for now, you are a conversational assistant."""
+You have access to tools that let you control the computer — use them when the user's request requires it.
+Only call a tool when necessary. For conversational questions, respond directly without tools."""
+
+
+def _build_system_prompt() -> str:
+    """Build the system prompt with real directory paths for the LLM."""
+    from utils.platform_utils import special_dirs
+    dirs = special_dirs()
+    return f"""You are {config.AGENT_NAME}, a personal AI assistant running locally on the user's computer.
+You are helpful, concise, and direct. You do not add unnecessary filler phrases.
+When you don't know something, say so clearly.
+You have access to tools that let you control the computer — use them when the user's request requires it.
+Only call a tool when necessary. For conversational questions, respond directly without tools.
+
+User's directory paths (use these exact paths when the user mentions a named location):
+  Home:      {dirs['home']}
+  Desktop:   {dirs['desktop']}
+  Documents: {dirs['documents']}
+  Downloads: {dirs['downloads']}"""
 
 
 class Agent:
@@ -27,7 +47,8 @@ class Agent:
 
     def _init_system_prompt(self):
         """Add system context as a user message and a primed assistant response."""
-        self.history.append(Message(role="user", content=SYSTEM_PROMPT))
+        prompt = _build_system_prompt()
+        self.history.append(Message(role="user", content=prompt))
         self.history.append(
             Message(
                 role="assistant",
@@ -36,28 +57,40 @@ class Agent:
         )
 
     def _trim_history(self):
-        """Preserve the first 2 messages (system prompt pair) and trim oldest conversation messages.
+        """Trim history to MAX_SESSION_TURNS, preserving system prompt pair.
 
-        Called after appending the user message but before the provider call.
-        Keeps total history within MAX_SESSION_TURNS * 2 + 2 messages
-        (accounting for the assistant response that will be appended after).
+        Only trims at user-message boundaries to avoid splitting tool-call
+        blocks (assistant + tool result pairs).
         """
         system_messages = self.history[:2]
         conversation = self.history[2:]
-        max_conversation = config.MAX_SESSION_TURNS * 2
-        if len(conversation) > max_conversation:
-            # Keep one fewer to leave room for the assistant response
-            keep = max_conversation - 1
-            conversation = conversation[-keep:]
-            self.history = system_messages + conversation
-            logger.debug(f"History trimmed to {len(self.history)} messages")
+        max_msgs = config.MAX_SESSION_TURNS * 2
+
+        if len(conversation) <= max_msgs:
+            return
+
+        # Walk forward from the oldest messages; drop complete turn pairs
+        # (user → ... → next user boundary)
+        while len(conversation) > max_msgs:
+            # Find the next user message after index 0
+            next_user = next(
+                (i for i, m in enumerate(conversation[1:], 1) if m.role == "user"),
+                None,
+            )
+            if next_user is None:
+                break
+            conversation = conversation[next_user:]
+
+        self.history = system_messages + conversation
+        logger.debug(f"History trimmed to {len(self.history)} messages")
 
     def chat(self, user_input: str) -> str:
         """Process a user message and return the assistant's response.
 
-        Appends the user message to history, calls the provider, appends the
-        assistant response, and returns the response content. Catches ProviderError
-        and returns a user-friendly error message.
+        Implements a tool-calling loop: sends messages to the LLM, and if the
+        LLM requests tool calls, executes them, appends results, and loops
+        until the LLM produces a final text response or the iteration limit
+        is reached.
 
         Args:
             user_input: The user's message string.
@@ -73,22 +106,59 @@ class Agent:
         self._trim_history()
         logger.info(f"User: {user_input}")
 
+        tools = get_tools()
+        tool_specs = [t.to_function_spec() for t in tools]
+
         try:
-            response = self.provider.generate(self.history)
-            reply = response.content.strip()
-            self.history.append(Message(role="assistant", content=reply))
-            logger.info(f"PAI: {reply[:100]}{'...' if len(reply) > 100 else ''}")
+            for iteration in range(config.MAX_TOOL_ITERATIONS):
+                # Use tool-aware generate if tools are available
+                if tool_specs:
+                    response = self.provider.generate_with_tools(self.history, tool_specs)
+                else:
+                    response = self.provider.generate(self.history)
+
+                # No tool calls → final text response
+                if not response.tool_calls:
+                    reply = response.content.strip()
+                    self.history.append(Message(role="assistant", content=reply))
+                    logger.info(f"PAI: {reply[:100]}{'...' if len(reply) > 100 else ''}")
+                    return reply
+
+                # Tool calls → execute each, append results, loop again
+                logger.info(f"Tool calls requested: {[tc.name for tc in response.tool_calls]}")
+                self.history.append(Message(
+                    role="assistant",
+                    content=response.content,
+                    tool_calls=response.tool_calls,
+                ))
+
+                for tool_call in response.tool_calls:
+                    try:
+                        result = dispatch(tool_call.name, tool_call.arguments)
+                        tool_output = result.output if result.success else f"Error: {result.error}"
+                    except ToolError as e:
+                        tool_output = f"Tool error: {e}"
+                        logger.error(f"ToolError: {e}")
+
+                    self.history.append(Message(
+                        role="tool",
+                        content=tool_output,
+                        tool_call_id=tool_call.id,
+                    ))
+
+            # Hit iteration limit
+            reply = "I wasn't able to complete that in the available steps. Please try a simpler request."
+            logger.warning("Max tool iterations reached")
             return reply
+
         except RateLimitError as e:
-            error_msg = "Rate limit reached. Please wait a moment before trying again."
+            self.history.pop()  # remove failed user message
             logger.warning(f"Rate limit: {e}")
-            self.history.pop()  # Remove the failed user message
-            return error_msg
+            return "Rate limit reached. Please wait a moment before trying again."
         except ProviderError as e:
-            error_msg = f"Something went wrong with the AI provider: {e}"
-            logger.error(f"Provider error: {e}")
             self.history.pop()
-            return error_msg
+            logger.error(f"Provider error: {e}")
+            return f"Something went wrong with the AI provider: {e}"
 
     def reset(self):
         """Clear conversation history and re-initialize the system prompt."""
