@@ -62,6 +62,17 @@ MEMORY_ENABLED: bool = os.getenv("MEMORY_ENABLED", "True").lower() in ("true", "
 MEMORY_DB_PATH: str = os.getenv("MEMORY_DB_PATH", "~/.pai/memory.db")
 MEMORY_INJECT_TOP_K: int = int(os.getenv("MEMORY_INJECT_TOP_K", "5"))
 
+# ── TTS / Barge-in ───────────────────────────────────────────────────
+TTS_ENABLED: bool = os.getenv("TTS_ENABLED", "True").lower() in ("true", "1", "yes")
+TTS_ENGINE: str = os.getenv("TTS_ENGINE", "kokoro")
+TTS_SPEED: float = float(os.getenv("TTS_SPEED", "1.0"))
+TTS_VOICE: str = os.getenv("TTS_VOICE", "af_heart")
+BARGE_IN_ENABLED: bool = os.getenv("BARGE_IN_ENABLED", "True").lower() in ("true", "1", "yes")
+
+# ── UI ────────────────────────────────────────────────────────────────
+OVERLAY_ENABLED: bool = os.getenv("OVERLAY_ENABLED", "True").lower() in ("true", "1", "yes")
+NOTIFICATIONS_ENABLED: bool = os.getenv("NOTIFICATIONS_ENABLED", "True").lower() in ("true", "1", "yes")
+
 # Valid provider names for validation
 SUPPORTED_PROVIDERS: set = {"gemini", "ollama"}
 
