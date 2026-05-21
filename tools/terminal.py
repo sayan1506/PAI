@@ -81,13 +81,24 @@ class TerminalTool(BaseTool):
                 )
 
         try:
-            result = subprocess.run(
-                command,
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
+            # Use PowerShell on Windows for better command support
+            from utils.platform_utils import get_platform
+            if get_platform() == "windows":
+                cmd = ["powershell", "-NoProfile", "-Command", command]
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+            else:
+                result = subprocess.run(
+                    command,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
             output = (result.stdout + result.stderr).strip()
             success = result.returncode == 0
             logger.info(f"Terminal: [{result.returncode}] {command[:80]}")

@@ -60,13 +60,11 @@ class TestCommandExecution:
         assert result.success is True
         assert "hello world" in result.output
         assert result.error == ""
-        mock_run.assert_called_once_with(
-            "echo hello world",
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
+        mock_run.assert_called_once()
+        # On Windows, uses PowerShell; on Linux, uses shell=True
+        call_args = mock_run.call_args
+        assert call_args[1]["timeout"] == 30
+        assert call_args[1]["capture_output"] is True
 
     @patch("tools.terminal.subprocess.run")
     def test_run_command_nonzero(self, mock_run, tool):

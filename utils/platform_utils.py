@@ -226,6 +226,10 @@ def special_dirs() -> dict[str, Path]:
     home = Path.home()
 
     def _resolve(name: str) -> Path:
+        # Check OneDrive path first (Windows with OneDrive backup)
+        onedrive = home / "OneDrive" / name
+        if onedrive.exists():
+            return onedrive
         candidate = home / name
         return candidate if candidate.exists() else home
 

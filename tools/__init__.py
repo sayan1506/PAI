@@ -24,6 +24,15 @@ def get_tools() -> list[BaseTool]:
         tools.append(AppLauncherTool())
     if config.ENABLE_TERMINAL:
         tools.append(TerminalTool())
+    if config.BROWSER_ENABLED:
+        from tools.browser import BrowserTool
+        tools.append(BrowserTool())
+    if config.VISION_ENABLED:
+        from tools.screen_reader import ScreenReaderTool
+        tools.append(ScreenReaderTool())
+    if config.MEMORY_ENABLED:
+        from tools.memory_tool import MemoryTool
+        tools.append(MemoryTool())
     return tools
 
 

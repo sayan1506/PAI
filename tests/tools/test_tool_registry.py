@@ -64,14 +64,17 @@ class TestGetTools:
         assert any(isinstance(t, TerminalTool) for t in tools)
 
     def test_all_enabled(self, monkeypatch):
-        """All flags True → 3 tools returned."""
+        """All flags True → 6 tools returned."""
         monkeypatch.setattr(config, "ENABLE_FILE_OPS", True)
         monkeypatch.setattr(config, "ENABLE_APP_LAUNCHER", True)
         monkeypatch.setattr(config, "ENABLE_TERMINAL", True)
+        monkeypatch.setattr(config, "BROWSER_ENABLED", True)
+        monkeypatch.setattr(config, "VISION_ENABLED", True)
+        monkeypatch.setattr(config, "MEMORY_ENABLED", True)
 
         tools = get_tools()
 
-        assert len(tools) == 3
+        assert len(tools) == 6
         assert any(isinstance(t, FileSystemTool) for t in tools)
         assert any(isinstance(t, AppLauncherTool) for t in tools)
         assert any(isinstance(t, TerminalTool) for t in tools)

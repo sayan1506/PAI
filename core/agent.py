@@ -10,6 +10,8 @@ from tools import get_tools, dispatch
 from providers.base import LLMProvider, Message, LLMResponse, ToolCall
 from core.exceptions import ProviderError, RateLimitError, ToolError
 from core.logger import logger
+from memory.store import init_db
+from memory.retriever import build_memory_context
 import config
 
 SYSTEM_PROMPT = f"""You are {config.AGENT_NAME}, a personal AI assistant running locally on the user's computer.
@@ -29,6 +31,20 @@ When you don't know something, say so clearly.
 You have access to tools that let you control the computer — use them when the user's request requires it.
 Only call a tool when necessary. For conversational questions, respond directly without tools.
 
+IMPORTANT RULES FOR TOOL USAGE:
+- The "browser" tool controls web browsing. Use it for opening URLs, searching Google, searching YouTube, scrolling web pages.
+- The "app_launcher" tool opens/closes desktop applications. Use it ONLY for launching or closing apps.
+- The "file_system" tool manages files. Always use FULL ABSOLUTE PATHS like {dirs['desktop']}\\filename.txt
+- The "terminal" tool runs shell commands. Use it for tasks like opening a folder in VS Code (e.g. code "C:\\path\\to\\folder"), checking versions, running scripts.
+- Do NOT use the browser tool for tasks that aren't web browsing.
+- Do NOT use app_launcher to minimize/maximize windows — it can only launch or close apps.
+- When the user says "open a folder in VS Code", use terminal with command: code "full_path_to_folder"
+- When the user says "search on YouTube", use browser with operation "search_youtube".
+- When the user says "search" without specifying where, use browser with operation "search" (Google).
+- If you cannot do something with the available tools, say so honestly.
+- When the user says "open" followed by a well-known website name (github, youtube, gmail, google, twitter/x, reddit, etc.), use the browser tool with open_url and the website's URL (e.g. https://github.com). Do NOT try to read .lnk shortcut files.
+- This computer runs Windows. Use PowerShell/Windows commands in terminal (not Linux commands like df, ls, cat). Examples: Get-Volume, Get-ChildItem, ipconfig, python --version.
+
 User's directory paths (use these exact paths when the user mentions a named location):
   Home:      {dirs['home']}
   Desktop:   {dirs['desktop']}
@@ -43,6 +59,9 @@ class Agent:
         self.provider = provider
         self.history: list[Message] = []
         self._init_system_prompt()
+        if config.MEMORY_ENABLED:
+            init_db()
+            logger.info("Memory store initialised.")
         logger.info("Agent initialised")
 
     def _init_system_prompt(self):
@@ -101,6 +120,15 @@ class Agent:
         user_input = user_input.strip()
         if not user_input:
             return "I didn't catch that. Could you say that again?"
+
+        # Inject per-turn memory context into system prompt
+        if config.MEMORY_ENABLED:
+            mem_ctx = build_memory_context(user_input)
+            base_prompt = _build_system_prompt()
+            self.history[0] = Message(
+                role="user",
+                content=base_prompt + (mem_ctx if mem_ctx else ""),
+            )
 
         self.history.append(Message(role="user", content=user_input))
         self._trim_history()

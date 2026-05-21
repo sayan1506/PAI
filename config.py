@@ -45,6 +45,23 @@ MAX_TOOL_ITERATIONS: int = int(os.getenv("MAX_TOOL_ITERATIONS", "5"))
 # ── Platform ──────────────────────────────────────────────────
 SCREEN_SCALE_FACTOR: float = float(os.getenv("SCREEN_SCALE_FACTOR", "1.0"))
 
+# ── Vision / Screen reader ────────────────────────────────────────────
+VISION_ENABLED: bool = os.getenv("VISION_ENABLED", "False").lower() in ("true", "1", "yes")
+VISION_PROVIDER: str = os.getenv("VISION_PROVIDER", "gemini")
+VISION_MODEL: str = os.getenv("VISION_MODEL", "gemma4:e4b")
+SCREENSHOT_DELAY: float = float(os.getenv("SCREENSHOT_DELAY", "0.3"))
+
+# ── Browser control ───────────────────────────────────────────────────
+BROWSER_ENABLED: bool = os.getenv("BROWSER_ENABLED", "False").lower() in ("true", "1", "yes")
+BROWSER_APP: str = os.getenv("BROWSER_APP", "chrome")
+BROWSER_REMOTE_PORT: int = int(os.getenv("BROWSER_REMOTE_PORT", "9222"))
+TYPING_SPEED: float = float(os.getenv("TYPING_SPEED", "0.04"))
+
+# ── Memory ────────────────────────────────────────────────────────────
+MEMORY_ENABLED: bool = os.getenv("MEMORY_ENABLED", "True").lower() in ("true", "1", "yes")
+MEMORY_DB_PATH: str = os.getenv("MEMORY_DB_PATH", "~/.pai/memory.db")
+MEMORY_INJECT_TOP_K: int = int(os.getenv("MEMORY_INJECT_TOP_K", "5"))
+
 # Valid provider names for validation
 SUPPORTED_PROVIDERS: set = {"gemini", "ollama"}
 
