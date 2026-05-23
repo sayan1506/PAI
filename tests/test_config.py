@@ -82,6 +82,30 @@ class TestValidateConfigRaises:
         with pytest.raises(ConfigError, match="Unknown LLM provider"):
             config.validate_config()
 
+    def test_raises_when_github_token_missing(self, monkeypatch):
+        """validate_config() raises ConfigError when provider is github and token is absent."""
+        monkeypatch.setattr(config, "LLM_PROVIDER", "github")
+        monkeypatch.setattr(config, "GITHUB_TOKEN", "")
+
+        with pytest.raises(ConfigError, match="GITHUB_TOKEN"):
+            config.validate_config()
+
+    def test_raises_when_anthropic_key_missing(self, monkeypatch):
+        """validate_config() raises ConfigError when provider is anthropic and key is absent."""
+        monkeypatch.setattr(config, "LLM_PROVIDER", "anthropic")
+        monkeypatch.setattr(config, "ANTHROPIC_API_KEY", "")
+
+        with pytest.raises(ConfigError, match="ANTHROPIC_API_KEY"):
+            config.validate_config()
+
+    def test_raises_when_openai_key_missing(self, monkeypatch):
+        """validate_config() raises ConfigError when provider is openai and key is absent."""
+        monkeypatch.setattr(config, "LLM_PROVIDER", "openai")
+        monkeypatch.setattr(config, "OPENAI_API_KEY", "")
+
+        with pytest.raises(ConfigError, match="OPENAI_API_KEY"):
+            config.validate_config()
+
 
 class TestValidateConfigPasses:
     """Test that validate_config() passes when config is valid."""
@@ -100,6 +124,30 @@ class TestValidateConfigPasses:
         monkeypatch.setenv("LLM_PROVIDER", "ollama")
         monkeypatch.delenv("GEMINI_API_KEY", raising=False)
         importlib.reload(config)
+
+        # Should not raise
+        config.validate_config()
+
+    def test_passes_with_github_token_set(self, monkeypatch):
+        """validate_config() does not raise when github token is provided."""
+        monkeypatch.setattr(config, "LLM_PROVIDER", "github")
+        monkeypatch.setattr(config, "GITHUB_TOKEN", "ghp_test")
+
+        # Should not raise
+        config.validate_config()
+
+    def test_passes_with_anthropic_key_set(self, monkeypatch):
+        """validate_config() does not raise when anthropic key is provided."""
+        monkeypatch.setattr(config, "LLM_PROVIDER", "anthropic")
+        monkeypatch.setattr(config, "ANTHROPIC_API_KEY", "sk-ant-test")
+
+        # Should not raise
+        config.validate_config()
+
+    def test_passes_with_openai_key_set(self, monkeypatch):
+        """validate_config() does not raise when openai key is provided."""
+        monkeypatch.setattr(config, "LLM_PROVIDER", "openai")
+        monkeypatch.setattr(config, "OPENAI_API_KEY", "sk-test")
 
         # Should not raise
         config.validate_config()

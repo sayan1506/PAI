@@ -5,13 +5,14 @@ Feature: pai-phase1-foundation, Property 4: Agent chat preserves conversation in
 Feature: pai-phase1-foundation, Property 5: History trimming preserves system prompt and respects bounds
 """
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from core.agent import Agent
+from core.exceptions import ProviderError, RateLimitError
 from providers.base import LLMProvider, LLMResponse, Message
 import config
 
@@ -212,3 +213,108 @@ class TestAgentResetProperty:
         assert agent.history[0].content == fresh_agent.history[0].content
         assert agent.history[1].role == fresh_agent.history[1].role
         assert agent.history[1].content == fresh_agent.history[1].content
+
+
+class TestAgentRateLimitFallback:
+    """Tests for Agent._call_provider rate-limit fallback logic."""
+
+    def test_call_provider_succeeds_on_first_try(self):
+        """_call_provider returns the response when the primary provider succeeds."""
+        provider = make_mock_provider("ok")
+        agent = Agent(provider)
+        messages = agent.history
+        tool_specs = [{"type": "function", "function": {"name": "test"}}]
+
+        result = agent._call_provider(messages, tool_specs)
+
+        assert result.content == "ok"
+        provider.generate_with_tools.assert_called_once_with(messages, tool_specs)
+
+    def test_call_provider_uses_generate_when_no_tools(self):
+        """_call_provider uses provider.generate() when tool_specs is empty."""
+        provider = make_mock_provider("ok")
+        agent = Agent(provider)
+        messages = agent.history
+
+        result = agent._call_provider(messages, tool_specs=[])
+
+        assert result.content == "ok"
+        provider.generate.assert_called_once_with(messages)
+        provider.generate_with_tools.assert_not_called()
+
+    @patch("core.agent.config")
+    def test_call_provider_falls_back_to_ollama_on_gemini_rate_limit(self, mock_config):
+        """When Gemini rate-limits, _call_provider falls back to OllamaProvider."""
+        mock_config.LLM_PROVIDER = "gemini"
+
+        provider = MagicMock(spec=LLMProvider)
+        provider.model_name = "mock-model"
+        provider.generate_with_tools.side_effect = RateLimitError("429 too many requests")
+
+        agent = Agent(provider)
+        messages = agent.history
+        tool_specs = [{"type": "function", "function": {"name": "test"}}]
+
+        fallback_response = LLMResponse(content="fallback ok")
+        with patch("providers.ollama.OllamaProvider") as MockOllama:
+            mock_ollama_instance = MagicMock()
+            mock_ollama_instance.generate_with_tools.return_value = fallback_response
+            MockOllama.return_value = mock_ollama_instance
+
+            result = agent._call_provider(messages, tool_specs)
+
+        assert result.content == "fallback ok"
+
+    @patch("core.agent.config")
+    def test_call_provider_raises_provider_error_if_ollama_also_fails(self, mock_config):
+        """When Gemini rate-limits and Ollama also fails, raises ProviderError."""
+        mock_config.LLM_PROVIDER = "gemini"
+
+        provider = MagicMock(spec=LLMProvider)
+        provider.model_name = "mock-model"
+        provider.generate_with_tools.side_effect = RateLimitError("429")
+
+        agent = Agent(provider)
+        messages = agent.history
+        tool_specs = [{"type": "function", "function": {"name": "test"}}]
+
+        with patch("providers.ollama.OllamaProvider") as MockOllama:
+            MockOllama.return_value.generate_with_tools.side_effect = Exception("Ollama down")
+
+            with pytest.raises(ProviderError) as exc_info:
+                agent._call_provider(messages, tool_specs)
+
+        assert "fallback" in str(exc_info.value).lower()
+
+    @patch("core.agent.config")
+    def test_call_provider_reraises_rate_limit_for_non_gemini_providers(self, mock_config):
+        """For non-Gemini providers, RateLimitError is re-raised without fallback."""
+        mock_config.LLM_PROVIDER = "anthropic"
+
+        provider = MagicMock(spec=LLMProvider)
+        provider.model_name = "mock-model"
+        provider.generate_with_tools.side_effect = RateLimitError("rate limited")
+
+        agent = Agent(provider)
+        messages = agent.history
+        tool_specs = [{"type": "function", "function": {"name": "test"}}]
+
+        with pytest.raises(RateLimitError):
+            agent._call_provider(messages, tool_specs)
+
+    def test_chat_returns_friendly_message_on_rate_limit_no_fallback(self, monkeypatch):
+        """When a non-Gemini provider rate-limits, chat() returns a friendly message."""
+        monkeypatch.setattr(config, "LLM_PROVIDER", "anthropic")
+
+        provider = MagicMock(spec=LLMProvider)
+        provider.model_name = "mock-model"
+        provider.generate_with_tools.side_effect = RateLimitError("rate limited")
+
+        agent = Agent(provider)
+        history_len_before = len(agent.history)
+
+        result = agent.chat("test")
+
+        assert "rate limit" in result.lower()
+        # History should not be corrupted - same length as before the call
+        assert len(agent.history) == history_len_before

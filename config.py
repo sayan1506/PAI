@@ -17,6 +17,16 @@ load_dotenv()
 
 LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "gemini")
 GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
+
+GITHUB_TOKEN:      str = os.getenv("GITHUB_TOKEN", "")
+GITHUB_MODEL:      str = os.getenv("GITHUB_MODEL", "gpt-4o")
+
+ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
+ANTHROPIC_MODEL:   str = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5")
+
+OPENAI_API_KEY:    str = os.getenv("OPENAI_API_KEY", "")
+OPENAI_MODEL:      str = os.getenv("OPENAI_MODEL", "gpt-4o")
+
 OLLAMA_HOST: str = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "llama3")
 LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
@@ -87,7 +97,7 @@ REMINDERS_ENABLED:        bool  = os.getenv("REMINDERS_ENABLED", "True").lower()
 REMINDER_POLL_INTERVAL:   int   = int(os.getenv("REMINDER_POLL_INTERVAL", "10"))  # seconds between DB polls
 
 # Valid provider names for validation
-SUPPORTED_PROVIDERS: set = {"gemini", "ollama"}
+SUPPORTED_PROVIDERS: set = {"gemini", "ollama", "github", "anthropic", "openai"}
 
 
 def validate_config() -> None:
@@ -95,20 +105,36 @@ def validate_config() -> None:
     Validate the current configuration.
 
     Raises ConfigError if:
-    - LLM_PROVIDER is not a supported provider name
-    - LLM_PROVIDER is "gemini" and GEMINI_API_KEY is not set
+    - LLM_PROVIDER is not in SUPPORTED_PROVIDERS
+    - The required API key for the selected provider is missing
+
+    Provider key requirements:
+      gemini    → GEMINI_API_KEY
+      github    → GITHUB_TOKEN
+      anthropic → ANTHROPIC_API_KEY
+      openai    → OPENAI_API_KEY
+      ollama    → no key required (local)
     """
     if LLM_PROVIDER not in SUPPORTED_PROVIDERS:
         raise ConfigError(
             f"Unknown LLM provider: '{LLM_PROVIDER}'. "
-            f"Supported providers: {', '.join(sorted(SUPPORTED_PROVIDERS))}"
+            f"Supported: {', '.join(sorted(SUPPORTED_PROVIDERS))}"
         )
 
-    if LLM_PROVIDER == "gemini" and not GEMINI_API_KEY:
-        raise ConfigError(
-            "GEMINI_API_KEY is required when LLM_PROVIDER is set to 'gemini'. "
-            "Set it in your .env file or environment variables."
-        )
+    _KEY_REQUIREMENTS = {
+        "gemini":    ("GEMINI_API_KEY",    GEMINI_API_KEY),
+        "github":    ("GITHUB_TOKEN",      GITHUB_TOKEN),
+        "anthropic": ("ANTHROPIC_API_KEY", ANTHROPIC_API_KEY),
+        "openai":    ("OPENAI_API_KEY",    OPENAI_API_KEY),
+    }
+
+    if LLM_PROVIDER in _KEY_REQUIREMENTS:
+        key_name, key_value = _KEY_REQUIREMENTS[LLM_PROVIDER]
+        if not key_value:
+            raise ConfigError(
+                f"{key_name} is required when LLM_PROVIDER is '{LLM_PROVIDER}'. "
+                f"Set it in your .env file."
+            )
 
     if ENABLE_TERMINAL:
         from core.logger import logger

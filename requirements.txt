@@ -32,3 +32,7 @@ plyer>=2.1.0
 
 # Phase 7 — Browser Control
 websocket-client>=1.8   # CDP WebSocket communication
+
+# Phase 9 — Multi-Provider
+openai>=1.0.0          # GitHub Models + OpenAI providers
+anthropic>=0.20.0      # Anthropic Claude provider

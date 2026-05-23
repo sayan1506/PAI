@@ -103,6 +103,66 @@ class Agent:
         self.history = system_messages + conversation
         logger.debug(f"History trimmed to {len(self.history)} messages")
 
+    def _call_provider(
+        self,
+        messages: list[Message],
+        tool_specs: list[dict],
+    ) -> LLMResponse:
+        """
+        Call the primary provider; fall back to Ollama if Gemini rate-limits.
+
+        Primary call:
+          Uses self.provider.generate_with_tools() if tool_specs is non-empty,
+          else self.provider.generate().
+
+        Fallback (Gemini → Ollama):
+          Triggered only when:
+            (a) a RateLimitError is raised, AND
+            (b) config.LLM_PROVIDER == "gemini"
+          On fallback, creates a fresh OllamaProvider() and retries the same call.
+          Logs a WARNING so the user can see the swap in pai.log.
+          If Ollama also fails, raises ProviderError with a clear message.
+          For all other providers, re-raises RateLimitError unchanged.
+
+        Args:
+            messages:   Current conversation history (including system prompt).
+            tool_specs: Serialised tool specs; may be empty list.
+
+        Returns:
+            LLMResponse from primary or fallback provider.
+
+        Raises:
+            RateLimitError: If primary rate-limits and no fallback applies.
+            ProviderError:  If the fallback also fails.
+        """
+        def _invoke(provider) -> LLMResponse:
+            if tool_specs:
+                return provider.generate_with_tools(messages, tool_specs)
+            return provider.generate(messages)
+
+        try:
+            return _invoke(self.provider)
+        except RateLimitError as e:
+            if config.LLM_PROVIDER != "gemini":
+                raise  # no fallback defined for non-Gemini providers
+
+            logger.warning(
+                f"Gemini rate limit reached ({e}). "
+                f"Attempting automatic fallback to Ollama."
+            )
+            try:
+                from providers.ollama import OllamaProvider
+                fallback = OllamaProvider()
+                result = _invoke(fallback)
+                logger.info("Ollama fallback succeeded for this turn.")
+                return result
+            except Exception as fallback_err:
+                logger.error(f"Ollama fallback failed: {fallback_err}")
+                raise ProviderError(
+                    "Gemini rate limit reached and Ollama fallback failed. "
+                    "Wait a moment or switch to a different provider."
+                )
+
     def chat(self, user_input: str) -> str:
         """Process a user message and return the assistant's response.
 
@@ -139,11 +199,7 @@ class Agent:
 
         try:
             for iteration in range(config.MAX_TOOL_ITERATIONS):
-                # Use tool-aware generate if tools are available
-                if tool_specs:
-                    response = self.provider.generate_with_tools(self.history, tool_specs)
-                else:
-                    response = self.provider.generate(self.history)
+                response = self._call_provider(self.history, tool_specs)
 
                 # No tool calls → final text response
                 if not response.tool_calls:
@@ -180,8 +236,8 @@ class Agent:
             return reply
 
         except RateLimitError as e:
-            self.history.pop()  # remove failed user message
-            logger.warning(f"Rate limit: {e}")
+            self.history.pop()
+            logger.warning(f"Rate limit (no fallback available): {e}")
             return "Rate limit reached. Please wait a moment before trying again."
         except ProviderError as e:
             self.history.pop()

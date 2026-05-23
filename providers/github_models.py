@@ -1,23 +1,58 @@
 """
-PAI GitHub Models Provider (stub)
+providers/github_models.py
 
-Placeholder for future GitHub Models integration.
-Implement in Phase 2.
+GitHubModelsProvider — uses GitHub Models' OpenAI-compatible inference
+endpoint with a GitHub Personal Access Token.
+
+Endpoint: https://models.inference.ai.azure.com
+Auth:     Bearer <GITHUB_TOKEN>
+Models:   gpt-4o (default), gpt-4o-mini, Llama-3.3-70B-Instruct, Phi-4, etc.
+
+Free tier: available to all GitHub accounts with a PAT that has the
+           "models" scope. Rate limits vary by model tier.
+
+API docs: https://docs.github.com/en/github-models
 """
 
-from providers.base import LLMProvider, LLMResponse, Message
-from core.exceptions import ProviderError
+from openai import OpenAI
+
+import config
+from core.logger import logger
+from providers.openai_compat import _OpenAICompatBase
+
+_GITHUB_BASE_URL = "https://models.inference.ai.azure.com"
 
 
-class GitHubModelsProvider(LLMProvider):
-    """GitHub Models LLM provider — not yet implemented."""
+class GitHubModelsProvider(_OpenAICompatBase):
+    """
+    LLM provider for GitHub Models (OpenAI-compatible endpoint).
+
+    Requires config.GITHUB_TOKEN to be set. The PAT must have the
+    "models" (read) scope enabled at github.com/settings/tokens.
+
+    Uses config.GITHUB_MODEL as the model name (default: "gpt-4o").
+    Override with GITHUB_MODEL env var (e.g. "gpt-4o-mini").
+    """
+
+    def __init__(self):
+        logger.info(
+            f"GitHubModelsProvider initialised "
+            f"(model: {config.GITHUB_MODEL}, endpoint: {_GITHUB_BASE_URL})"
+        )
 
     @property
     def model_name(self) -> str:
-        raise NotImplementedError
+        """Return the configured GitHub Models model name."""
+        return config.GITHUB_MODEL
 
-    def generate(self, messages: list[Message]) -> LLMResponse:
-        raise ProviderError("GitHubModelsProvider is not yet implemented.")
+    def _make_client(self) -> OpenAI:
+        """
+        Build an OpenAI client pointed at the GitHub Models inference endpoint.
 
-    def health_check(self) -> bool:
-        raise ProviderError("GitHubModelsProvider is not yet implemented.")
+        Called on every request so that GITHUB_TOKEN changes in config (e.g.
+        during tests using monkeypatch) are always picked up.
+        """
+        return OpenAI(
+            base_url=_GITHUB_BASE_URL,
+            api_key=config.GITHUB_TOKEN,
+        )

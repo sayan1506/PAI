@@ -115,3 +115,57 @@ class TestProviderFactoryValidNames:
 
         assert result is mock_gemini_instance
         mock_gemini_provider_class.assert_called_once()
+
+    def test_get_provider_github_returns_github_provider(self):
+        """get_provider('github') returns a GitHubModelsProvider instance."""
+        from unittest.mock import MagicMock, patch
+
+        mock_github_module = MagicMock()
+        mock_github_provider_class = MagicMock()
+        mock_github_instance = MagicMock()
+        mock_github_provider_class.return_value = mock_github_instance
+        mock_github_module.GitHubModelsProvider = mock_github_provider_class
+
+        with patch.dict(
+            "sys.modules", {"providers.github_models": mock_github_module}
+        ):
+            result = get_provider("github")
+
+        assert result is mock_github_instance
+        mock_github_provider_class.assert_called_once()
+
+    def test_get_provider_anthropic_returns_anthropic_provider(self):
+        """get_provider('anthropic') returns an AnthropicProvider instance."""
+        from unittest.mock import MagicMock, patch
+
+        mock_anthropic_module = MagicMock()
+        mock_anthropic_provider_class = MagicMock()
+        mock_anthropic_instance = MagicMock()
+        mock_anthropic_provider_class.return_value = mock_anthropic_instance
+        mock_anthropic_module.AnthropicProvider = mock_anthropic_provider_class
+
+        with patch.dict(
+            "sys.modules", {"providers.anthropic": mock_anthropic_module}
+        ):
+            result = get_provider("anthropic")
+
+        assert result is mock_anthropic_instance
+        mock_anthropic_provider_class.assert_called_once()
+
+    def test_get_provider_openai_returns_openai_provider(self):
+        """get_provider('openai') returns an OpenAIProvider instance."""
+        from unittest.mock import MagicMock, patch
+
+        mock_openai_module = MagicMock()
+        mock_openai_provider_class = MagicMock()
+        mock_openai_instance = MagicMock()
+        mock_openai_provider_class.return_value = mock_openai_instance
+        mock_openai_module.OpenAIProvider = mock_openai_provider_class
+
+        with patch.dict(
+            "sys.modules", {"providers.openai_provider": mock_openai_module}
+        ):
+            result = get_provider("openai")
+
+        assert result is mock_openai_instance
+        mock_openai_provider_class.assert_called_once()

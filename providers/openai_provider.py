@@ -1,23 +1,42 @@
 """
-PAI OpenAI Provider (stub)
+providers/openai_provider.py
 
-Placeholder for future OpenAI integration.
-Implement in Phase 2.
+OpenAIProvider — standard OpenAI API (api.openai.com).
+
+Uses config.OPENAI_API_KEY and config.OPENAI_MODEL (default: "gpt-4o").
+Supports tool calling via the OpenAI function-calling API.
 """
 
-from providers.base import LLMProvider, LLMResponse, Message
-from core.exceptions import ProviderError
+from openai import OpenAI
+
+import config
+from core.logger import logger
+from providers.openai_compat import _OpenAICompatBase
 
 
-class OpenAIProvider(LLMProvider):
-    """OpenAI LLM provider — not yet implemented."""
+class OpenAIProvider(_OpenAICompatBase):
+    """
+    LLM provider for the OpenAI API.
+
+    Requires config.OPENAI_API_KEY. Uses config.OPENAI_MODEL (default: "gpt-4o").
+    Override with OPENAI_MODEL env var (e.g. "gpt-4o-mini").
+    """
+
+    def __init__(self):
+        logger.info(
+            f"OpenAIProvider initialised (model: {config.OPENAI_MODEL})"
+        )
 
     @property
     def model_name(self) -> str:
-        raise NotImplementedError
+        """Return the configured OpenAI model name."""
+        return config.OPENAI_MODEL
 
-    def generate(self, messages: list[Message]) -> LLMResponse:
-        raise ProviderError("OpenAIProvider is not yet implemented.")
+    def _make_client(self) -> OpenAI:
+        """
+        Build a standard OpenAI client.
 
-    def health_check(self) -> bool:
-        raise ProviderError("OpenAIProvider is not yet implemented.")
+        Called on every request so OPENAI_API_KEY changes in tests are
+        always picked up.
+        """
+        return OpenAI(api_key=config.OPENAI_API_KEY)
