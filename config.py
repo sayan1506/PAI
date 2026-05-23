@@ -56,6 +56,9 @@ BROWSER_ENABLED: bool = os.getenv("BROWSER_ENABLED", "False").lower() in ("true"
 BROWSER_APP: str = os.getenv("BROWSER_APP", "chrome")
 BROWSER_REMOTE_PORT: int = int(os.getenv("BROWSER_REMOTE_PORT", "9222"))
 TYPING_SPEED: float = float(os.getenv("TYPING_SPEED", "0.04"))
+BROWSER_BINARY: str = os.getenv("BROWSER_BINARY", "")  # override Chrome binary path (auto-detect if empty)
+BROWSER_CDP_TIMEOUT: int = int(os.getenv("BROWSER_CDP_TIMEOUT", "10"))  # seconds to wait for debugging port
+BROWSER_TYPE_DELAY: float = float(os.getenv("BROWSER_TYPE_DELAY", "0.04"))  # seconds between keystrokes
 
 # ── Memory ────────────────────────────────────────────────────────────
 MEMORY_ENABLED: bool = os.getenv("MEMORY_ENABLED", "True").lower() in ("true", "1", "yes")
@@ -72,6 +75,16 @@ BARGE_IN_ENABLED: bool = os.getenv("BARGE_IN_ENABLED", "True").lower() in ("true
 # ── UI ────────────────────────────────────────────────────────────────
 OVERLAY_ENABLED: bool = os.getenv("OVERLAY_ENABLED", "True").lower() in ("true", "1", "yes")
 NOTIFICATIONS_ENABLED: bool = os.getenv("NOTIFICATIONS_ENABLED", "True").lower() in ("true", "1", "yes")
+
+# ── Weather ───────────────────────────────────────────────────────────
+WEATHER_ENABLED:          bool  = os.getenv("WEATHER_ENABLED", "False").lower() in ("true", "1", "yes")
+WEATHER_API_KEY:          str   = os.getenv("WEATHER_API_KEY", "")
+WEATHER_UNITS:            str   = os.getenv("WEATHER_UNITS", "metric")   # metric | imperial
+WEATHER_DEFAULT_LOCATION: str   = os.getenv("WEATHER_DEFAULT_LOCATION", "")
+
+# ── Reminders ─────────────────────────────────────────────────────────
+REMINDERS_ENABLED:        bool  = os.getenv("REMINDERS_ENABLED", "True").lower() in ("true", "1", "yes")
+REMINDER_POLL_INTERVAL:   int   = int(os.getenv("REMINDER_POLL_INTERVAL", "10"))  # seconds between DB polls
 
 # Valid provider names for validation
 SUPPORTED_PROVIDERS: set = {"gemini", "ollama"}

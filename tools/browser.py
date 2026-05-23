@@ -1,39 +1,46 @@
 """
 tools/browser.py
 
-Browser control tool for PAI.
-Launches Chrome/Brave with the real user profile so existing sessions
-(YouTube, Gmail, etc.) are already logged in.
+BrowserTool — gives the LLM real, visible control over Chrome.
 
-Strategy:
-  - subprocess + --remote-debugging-port  → launch with real profile
-  - PyAutoGUI                             → type text, focus window
-  - CDP (urllib, no Playwright)           → read page URL and title
+Operations (passed as `action` argument):
+  open_url    — navigate to a URL
+  search      — open default search engine and type a query
+  click       — click by visible text label or x,y coordinates
+  scroll      — scroll the page up or down
+  read_page   — return the page's visible text to the LLM
+  close       — close the browser
+
+All input actions (typing, clicking) use PyAutoGUI so they are
+visible on screen. Page reading uses CDP for speed and accuracy.
 """
 
-from __future__ import annotations
+import json
 import time
-import subprocess
-import psutil
+import urllib.parse
+
 import pyautogui
+
 import config
 from tools.base import BaseTool, ToolResult
-from utils.platform_utils import find_app_path, get_platform
-from utils.browser_utils import (
-    chrome_profile_path,
-    brave_profile_path,
-    browser_executable,
-    wait_for_cdp,
-    cdp_active_tab,
-)
+from tools.browser_launcher import ChromeLauncher
 from core.logger import logger
 
-pyautogui.FAILSAFE = True
-pyautogui.PAUSE = 0.05
+
+# Search URL templates — suffix with urllib.parse.quote_plus(query)
+_SEARCH_ENGINES = {
+    "google": "https://www.google.com/search?q=",
+    "bing": "https://www.bing.com/search?q=",
+    "duckduckgo": "https://duckduckgo.com/?q=",
+}
+_DEFAULT_SEARCH_ENGINE = "google"
 
 
 class BrowserTool(BaseTool):
-    """Control a real browser session."""
+
+    def __init__(self):
+        self._launcher = ChromeLauncher()
+        self._loaded = False
 
     @property
     def name(self) -> str:
@@ -42,10 +49,18 @@ class BrowserTool(BaseTool):
     @property
     def description(self) -> str:
         return (
-            "Control a web browser. Can open URLs, search the web, type in the "
-            "address bar, scroll, and read the current page title and URL. "
-            "The browser opens with the user's real profile so they are already "
-            "logged in to their accounts."
+            "Controls the user's real Chrome browser. "
+            "Use this tool to open websites, search the web, click links, "
+            "scroll pages, and read the text content of any web page. "
+            "All actions are visible on screen. "
+            "The browser uses the user's real profile, so they are already "
+            "logged in to all their accounts. "
+            "Use action='open_url' to navigate to a URL. "
+            "Use action='search' to search the web for a query. "
+            "Use action='click' to click a link or button by its text label. "
+            "Use action='scroll' to scroll the page up or down. "
+            "Use action='read_page' to get the visible text of the current page. "
+            "Use action='close' to close the browser."
         )
 
     @property
@@ -53,265 +68,196 @@ class BrowserTool(BaseTool):
         return {
             "type": "object",
             "properties": {
-                "operation": {
+                "action": {
                     "type": "string",
-                    "enum": ["open_url", "search", "search_youtube", "type_text", "scroll", "read_page", "get_url"],
-                    "description": (
-                        "open_url: navigate to a URL. "
-                        "search: search Google for a query. "
-                        "search_youtube: open YouTube and search for a query in YouTube's search bar. "
-                        "type_text: type text into the currently focused input field and press Enter. "
-                        "scroll: scroll the page up or down. "
-                        "read_page: return the current page title and URL. "
-                        "get_url: return just the current URL."
-                    ),
+                    "enum": ["open_url", "search", "click", "scroll",
+                             "read_page", "close"],
+                    "description": "The browser action to perform.",
                 },
                 "url": {
                     "type": "string",
-                    "description": "Full URL to open (required for open_url).",
+                    "description": "URL to navigate to. Required for action='open_url'.",
                 },
                 "query": {
                     "type": "string",
-                    "description": "Search query (required for search and search_youtube).",
+                    "description": "Search query. Required for action='search'.",
                 },
-                "text": {
+                "target": {
                     "type": "string",
-                    "description": "Text to type into the current input field (required for type_text).",
-                },
-                "direction": {
-                    "type": "string",
-                    "enum": ["up", "down"],
-                    "description": "Scroll direction (required for scroll).",
+                    "description": (
+                        "For action='click': visible text of the link or button to click. "
+                        "For action='scroll': direction — 'up' or 'down'."
+                    ),
                 },
                 "amount": {
                     "type": "integer",
-                    "description": "Number of scroll clicks (default 3).",
+                    "description": "For action='scroll': number of scroll clicks (default 3).",
                 },
             },
-            "required": ["operation"],
+            "required": ["action"],
         }
 
     def execute(self, **kwargs) -> ToolResult:
-        if not config.BROWSER_ENABLED:
-            return ToolResult(
-                success=False,
-                error="Browser tool is disabled. Set BROWSER_ENABLED=true in config.",
-            )
-
-        operation = kwargs.get("operation")
-        handler = getattr(self, f"_op_{operation}", None)
-        if not handler:
-            return ToolResult(success=False, error=f"Unknown browser operation: {operation}")
-
-        # Ensure browser is running before any operation
-        launch_result = self._ensure_browser_running()
-        if not launch_result.success:
-            return launch_result
-
-        return handler(**kwargs)
-
-    # ── Internal helpers ───────────────────────────────────────────────────────
-
-    def _get_profile_path(self) -> str | None:
-        browser = config.BROWSER_APP.lower()
-        path = chrome_profile_path() if browser == "chrome" else brave_profile_path()
-        return str(path) if path else None
-
-    def _ensure_browser_running(self) -> ToolResult:
-        """Launch the browser if CDP is not already available."""
-        if cdp_active_tab(config.BROWSER_REMOTE_PORT):
-            self._cdp_available = True
-            return ToolResult(success=True, output="Browser already running.")
-
-        browser = config.BROWSER_APP.lower()
-        exe = browser_executable(browser)
-        if not exe:
-            return ToolResult(success=False, error=f"Unknown browser: {browser}")
-
-        full_path = find_app_path(exe)
-        if not full_path:
-            return ToolResult(
-                success=False,
-                error=f"{browser.capitalize()} not found. Is it installed?",
-            )
-
-        profile = self._get_profile_path()
-
-        # Check if ANY browser is already running — use OS URL opening
-        browser_names = ["chrome.exe", "brave.exe", "firefox.exe", "msedge.exe",
-                         "google-chrome", "brave-browser"]
-        browser_running = any(
-            (p.info.get("name") or "").lower() in browser_names
-            for p in psutil.process_iter(["name"])
-        )
-
-        if browser_running:
-            logger.info("Browser already running — using OS URL opening mode")
-            self._cdp_available = False
-            return ToolResult(success=True, output="Browser already running.")
-
-        cmd = [
-            full_path,
-            f"--remote-debugging-port={config.BROWSER_REMOTE_PORT}",
-            "--no-first-run",
-            "--no-default-browser-check",
-        ]
-        if profile:
-            cmd.append(f"--user-data-dir={profile}")
-
+        """Route to the correct action handler. Never raises — wraps all exceptions."""
+        action = kwargs.get("action", "")
         try:
-            subprocess.Popen(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            logger.info(f"Browser launched: {browser} (profile={profile})")
-
-            if wait_for_cdp(config.BROWSER_REMOTE_PORT, timeout=15.0):
-                self._cdp_available = True
+            self._ensure_loaded()
+            if action == "open_url":
+                return self._open_url(kwargs.get("url", ""))
+            elif action == "search":
+                return self._search(kwargs.get("query", ""))
+            elif action == "click":
+                return self._click(kwargs.get("target", ""))
+            elif action == "scroll":
+                return self._scroll(
+                    kwargs.get("target", "down"),
+                    kwargs.get("amount", 3),
+                )
+            elif action == "read_page":
+                return self._read_page()
+            elif action == "close":
+                return self._close()
             else:
-                self._cdp_available = False
-                logger.warning("CDP not available — using OS URL opening mode")
-
-            return ToolResult(success=True, output="Browser launched.")
-
+                return ToolResult(success=False, error=f"Unknown action: {action!r}")
         except Exception as e:
-            return ToolResult(success=False, error=f"Failed to launch browser: {e}")
+            logger.error(f"BrowserTool error ({action}): {e}")
+            return ToolResult(success=False, error=str(e))
 
-    def _focus_browser(self):
-        """Bring the browser window to the foreground."""
-        if get_platform() == "windows":
-            try:
-                import pygetwindow as gw
-                # Search for browser windows by common title patterns
-                browser_keywords = ["brave", "chrome", "firefox", "edge", "mozilla"]
-                all_wins = gw.getAllWindows()
-                for keyword in browser_keywords:
-                    wins = [w for w in all_wins if keyword in w.title.lower() and w.title.strip()]
-                    if wins:
-                        try:
-                            wins[0].activate()
-                        except Exception:
-                            # If activate fails, try minimize then restore
-                            wins[0].minimize()
-                            time.sleep(0.1)
-                            wins[0].restore()
-                        time.sleep(0.5)
-                        return
-                # Fallback: Alt+Tab to switch to last window
-                pyautogui.hotkey("alt", "tab")
-                time.sleep(0.5)
-            except Exception:
-                pyautogui.hotkey("alt", "tab")
-                time.sleep(0.5)
-        else:
-            subprocess.run(
-                ["xdotool", "search", "--name", config.BROWSER_APP,
-                 "windowactivate", "--sync"],
-                capture_output=True,
-            )
+    def _ensure_loaded(self) -> None:
+        """Launch or attach Chrome on first use."""
+        if not self._loaded:
+            self._launcher.ensure_running()
+            self._loaded = True
 
-    # ── Operations ─────────────────────────────────────────────────────────────
+    def _open_url(self, url: str) -> ToolResult:
+        """
+        Navigate to url visibly by typing it into the address bar.
 
-    def _op_open_url(self, **kwargs) -> ToolResult:
-        url = kwargs.get("url", "").strip()
+        Steps:
+          1. Normalise URL — prepend "https://" if no scheme present
+          2. Focus address bar with Ctrl+L
+          3. Select all, type URL, press Enter
+          4. Wait for page to start loading
+        """
         if not url:
-            return ToolResult(success=False, error="No URL provided.")
-        if not url.startswith(("http://", "https://")):
+            return ToolResult(success=False, error="No URL provided for open_url action")
+
+        # Normalise URL — prepend https:// if no scheme present
+        if "://" not in url:
             url = "https://" + url
 
-        try:
-            # If we have CDP, use PyAutoGUI for precise control
-            if getattr(self, "_cdp_available", False):
-                self._focus_browser()
-                time.sleep(0.4)
-                pyautogui.hotkey("ctrl", "l")
-                time.sleep(0.3)
-                pyautogui.hotkey("ctrl", "a")
-                pyautogui.typewrite(url, interval=config.TYPING_SPEED)
-                pyautogui.press("enter")
-                time.sleep(1.5)
-            else:
-                # No CDP — use OS to open URL in default/configured browser
-                if get_platform() == "windows":
-                    import os
-                    os.startfile(url)
-                else:
-                    subprocess.Popen(
-                        ["xdg-open", url],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                    )
-                time.sleep(2.0)
+        # Focus the address bar
+        pyautogui.hotkey("ctrl", "l")
+        time.sleep(0.3)
 
-            return ToolResult(success=True, output=f"Navigated to: {url}")
-        except Exception as e:
-            return ToolResult(success=False, error=f"open_url failed: {e}")
+        # Select all existing text in the address bar
+        pyautogui.hotkey("ctrl", "a")
 
-    def _op_search(self, **kwargs) -> ToolResult:
-        query = kwargs.get("query", "").strip()
+        # Type the URL visibly
+        pyautogui.typewrite(url, interval=config.BROWSER_TYPE_DELAY)
+
+        # Press Enter to navigate
+        pyautogui.press("enter")
+
+        # Wait for page to start loading
+        time.sleep(1.5)
+
+        return ToolResult(success=True, output=f"Navigated to {url}")
+
+    def _search(self, query: str) -> ToolResult:
+        """
+        Search the web for query using the default search engine.
+
+        Builds the full search URL and navigates to it via _open_url.
+        """
         if not query:
-            return ToolResult(success=False, error="No search query provided.")
+            return ToolResult(success=False, error="No query provided for search action")
 
-        search_url = f"https://www.google.com/search?q={query.replace(' ', '+')}"
-        return self._op_open_url(url=search_url)
+        search_url = _SEARCH_ENGINES[_DEFAULT_SEARCH_ENGINE] + urllib.parse.quote_plus(query)
+        return self._open_url(search_url)
 
-    def _op_search_youtube(self, **kwargs) -> ToolResult:
-        """Open YouTube and search using YouTube's search bar."""
-        query = kwargs.get("query", "").strip()
-        if not query:
-            return ToolResult(success=False, error="No search query provided.")
+    def _click(self, target: str) -> ToolResult:
+        """
+        Click an element whose visible text matches target.
 
-        # Use YouTube's search URL directly — this searches within YouTube
-        yt_search_url = f"https://www.youtube.com/results?search_query={query.replace(' ', '+')}"
-        return self._op_open_url(url=yt_search_url)
+        Uses CDP to find the element's bounding rect, then PyAutoGUI
+        to perform the visible click at the element's centre.
+        """
+        if not target:
+            return ToolResult(success=False, error="No target provided for click action")
 
-    def _op_type_text(self, **kwargs) -> ToolResult:
-        """Type text into the currently focused input field and press Enter."""
-        text = kwargs.get("text", "").strip()
-        if not text:
-            return ToolResult(success=False, error="No text provided.")
+        target_lower = target.lower().replace('"', '\\"')
 
-        try:
-            self._focus_browser()
-            time.sleep(0.3)
-            pyautogui.typewrite(text, interval=config.TYPING_SPEED)
-            pyautogui.press("enter")
-            time.sleep(1.0)
-            return ToolResult(success=True, output=f"Typed and submitted: {text}")
-        except Exception as e:
-            return ToolResult(success=False, error=f"type_text failed: {e}")
-
-    def _op_scroll(self, **kwargs) -> ToolResult:
-        direction = kwargs.get("direction", "down")
-        amount = int(kwargs.get("amount", 3))
-        clicks = -amount if direction == "down" else amount
-
-        try:
-            self._focus_browser()
-            time.sleep(0.3)
-            pyautogui.scroll(clicks)
-            return ToolResult(success=True, output=f"Scrolled {direction} {amount} clicks.")
-        except Exception as e:
-            return ToolResult(success=False, error=f"scroll failed: {e}")
-
-    def _op_read_page(self, **kwargs) -> ToolResult:
-        tab = cdp_active_tab(config.BROWSER_REMOTE_PORT)
-        if not tab:
-            return ToolResult(
-                success=True,
-                output="Cannot read page info — browser is running without CDP. Use screen_reader to see what's on screen.",
-            )
-        return ToolResult(
-            success=True,
-            output=f"Title: {tab.get('title', 'N/A')}\nURL: {tab.get('url', 'N/A')}",
+        # JavaScript to find the first matching clickable element
+        js = (
+            f'const target = "{target_lower}";'
+            'const elements = document.querySelectorAll("a, button, input, [role=\'button\'], [onclick]");'
+            'for (const el of elements) {'
+            '    if (el.innerText && el.innerText.trim().toLowerCase().includes(target)) {'
+            '        const rect = el.getBoundingClientRect();'
+            '        return JSON.stringify({x: rect.x, y: rect.y, width: rect.width, height: rect.height});'
+            '    }'
+            '}'
+            'return null;'
         )
 
-    def _op_get_url(self, **kwargs) -> ToolResult:
-        tab = cdp_active_tab(config.BROWSER_REMOTE_PORT)
-        if not tab:
-            return ToolResult(
-                success=True,
-                output="Cannot read URL — browser is running without CDP.",
-            )
-        return ToolResult(success=True, output=tab.get("url", ""))
+        # Wrap in an IIFE so 'return' is valid
+        js_wrapped = f"(function() {{ {js} }})()"
+
+        result = self._launcher.cdp.send(
+            "Runtime.evaluate",
+            {"expression": js_wrapped, "returnByValue": True}
+        )
+
+        value = result.get("result", {}).get("value")
+
+        if value is None:
+            return ToolResult(success=False, error=f"No element found with text: {target}")
+
+        # Parse the bounding rect
+        rect = json.loads(value)
+        cx = (rect["x"] + rect["width"] / 2) * config.SCREEN_SCALE_FACTOR
+        cy = (rect["y"] + rect["height"] / 2) * config.SCREEN_SCALE_FACTOR
+
+        # Click at the computed centre
+        pyautogui.click(int(cx), int(cy))
+        time.sleep(0.5)
+
+        return ToolResult(success=True, output=f"Clicked element: {target}")
+
+    def _scroll(self, direction: str, amount: int) -> ToolResult:
+        """
+        Scroll the page up or down.
+
+        Moves the mouse to screen centre and scrolls by the given amount.
+        """
+        width, height = pyautogui.size()
+        pyautogui.moveTo(width // 2, height // 2)
+
+        if direction == "up":
+            pyautogui.scroll(amount)
+        else:
+            pyautogui.scroll(-amount)
+
+        return ToolResult(success=True, output=f"Scrolled {direction} by {amount} clicks")
+
+    def _read_page(self) -> ToolResult:
+        """
+        Return the visible text of the current page via CDP.
+
+        Truncates to 8000 characters if the page is very long.
+        """
+        text = self._launcher.cdp.get_page_text()
+
+        if len(text) > 8000:
+            text = text[:8000] + "\n\n[truncated — page has more content]"
+
+        return ToolResult(success=True, output=text)
+
+    def _close(self) -> ToolResult:
+        """
+        Close the browser and reset state.
+        """
+        self._launcher.close()
+        self._loaded = False
+        return ToolResult(success=True, output="Browser closed")

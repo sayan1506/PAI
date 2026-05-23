@@ -65,8 +65,15 @@ def main():
 
 def _run_text_mode(agent):
     """Text-based chat loop with conversation overlay."""
+    from core.reminder_scheduler import ReminderScheduler
+
     overlay = ConversationOverlay()
     overlay.start()
+
+    scheduler = None
+    if config.REMINDERS_ENABLED:
+        scheduler = ReminderScheduler()
+        scheduler.start()
 
     print("PAI is ready. Type your message and press Enter.")
     print("Commands: 'reset' to clear history | 'exit' to quit\n")
@@ -95,6 +102,8 @@ def _run_text_mode(agent):
             print(f"\nPAI: {response}\n")
             overlay.update(user_input, response)
     finally:
+        if scheduler is not None:
+            scheduler.stop()
         overlay.close()
 
 
@@ -102,6 +111,7 @@ def _run_voice_mode(agent):
     """Voice input loop using wake word + STT, with TTS, overlay, and notifications."""
     from voice.pipeline import VoicePipeline
     from core.exceptions import AudioError
+    from core.reminder_scheduler import ReminderScheduler
 
     # Load TTS engine — returns None if disabled or on failure
     tts = get_tts()
@@ -114,6 +124,11 @@ def _run_voice_mode(agent):
     overlay = ConversationOverlay()
     overlay.start()
 
+    scheduler = None
+    if config.REMINDERS_ENABLED:
+        scheduler = ReminderScheduler()
+        scheduler.start()
+
     print(f"Voice mode active. Say '{config.WAKE_WORD}' to speak.")
     print("Press Ctrl+C to quit.\n")
 
@@ -122,6 +137,8 @@ def _run_voice_mode(agent):
         pipeline.load()
     except AudioError as e:
         print(f"\n[VOICE ERROR] {e}\n")
+        if scheduler is not None:
+            scheduler.stop()
         overlay.close()
         sys.exit(1)
 
@@ -137,6 +154,8 @@ def _run_voice_mode(agent):
     try:
         pipeline.run_forever(handle_transcription, tts=tts)
     finally:
+        if scheduler is not None:
+            scheduler.stop()
         overlay.close()
 
 

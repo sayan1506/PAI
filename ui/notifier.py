@@ -12,12 +12,13 @@ import config
 logger = logging.getLogger(__name__)
 
 
-def notify(message: str, timeout: int = 5) -> None:
+def notify(message: str, timeout: int = 5, title: str | None = None) -> None:
     """Send a desktop toast notification.
 
     Args:
         message: The notification body text (truncated to 80 chars).
         timeout: How long the notification stays visible, in seconds.
+        title:   Optional notification title. Defaults to config.AGENT_NAME.
 
     Notes:
         - Returns immediately if NOTIFICATIONS_ENABLED is false.
@@ -28,12 +29,14 @@ def notify(message: str, timeout: int = 5) -> None:
     if not config.NOTIFICATIONS_ENABLED:
         return
 
+    display_title = title if title is not None else config.AGENT_NAME
+
     try:
         from plyer import notification  # noqa: PLC0415
 
         truncated = message[:80]
         notification.notify(
-            title=config.AGENT_NAME,
+            title=display_title,
             message=truncated,
             app_name=config.AGENT_NAME,
             timeout=timeout,

@@ -33,6 +33,12 @@ def get_tools() -> list[BaseTool]:
     if config.MEMORY_ENABLED:
         from tools.memory_tool import MemoryTool
         tools.append(MemoryTool())
+    if config.WEATHER_ENABLED:
+        from tools.weather import WeatherTool
+        tools.append(WeatherTool())
+    if config.REMINDERS_ENABLED:
+        from tools.reminder import ReminderTool
+        tools.append(ReminderTool())
     return tools
 
 

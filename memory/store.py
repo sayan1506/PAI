@@ -53,6 +53,17 @@ def init_db() -> None:
                 description TEXT    NOT NULL,
                 created_at  TEXT    NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS reminders (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                message     TEXT    NOT NULL,
+                fire_at     TEXT    NOT NULL,
+                fired       INTEGER NOT NULL DEFAULT 0,
+                created_at  TEXT    NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_reminders_fire_at
+                ON reminders (fire_at) WHERE fired = 0;
         """)
         conn.commit()
         conn.close()
@@ -194,3 +205,106 @@ def all_shortcuts() -> list[dict]:
         ).fetchall()
         conn.close()
         return [dict(r) for r in rows]
+
+
+# ── Reminders ─────────────────────────────────────────────────────────────────
+
+def add_reminder(message: str, fire_at_iso: str) -> int:
+    """
+    Insert a new pending reminder. Returns the new row id.
+
+    Args:
+        message:     The text to display when the reminder fires.
+        fire_at_iso: UTC ISO 8601 timestamp string for when to fire.
+
+    Returns:
+        The integer id of the newly inserted reminder row.
+    """
+    now = _now()
+    with _lock:
+        conn = _connect()
+        cursor = conn.execute(
+            "INSERT INTO reminders (message, fire_at, fired, created_at) "
+            "VALUES (?, ?, 0, ?)",
+            (message.strip(), fire_at_iso, now),
+        )
+        conn.commit()
+        row_id = cursor.lastrowid
+        conn.close()
+    return row_id
+
+
+def pending_reminders() -> list[dict]:
+    """
+    Return all reminders that are due (fire_at <= now UTC) and not yet fired.
+
+    The scheduler calls this every poll interval to find reminders to fire.
+    Returns a list of dicts with keys: id, message, fire_at, created_at.
+    """
+    now = _now()
+    with _lock:
+        conn = _connect()
+        rows = conn.execute(
+            "SELECT id, message, fire_at, created_at FROM reminders "
+            "WHERE fired = 0 AND fire_at <= ? "
+            "ORDER BY fire_at ASC",
+            (now,),
+        ).fetchall()
+        conn.close()
+    return [dict(r) for r in rows]
+
+
+def all_reminders(include_fired: bool = False) -> list[dict]:
+    """
+    Return all reminders, ordered by fire_at ascending.
+
+    Args:
+        include_fired: If False (default) only pending reminders are returned.
+
+    Returns:
+        List of dicts with keys: id, message, fire_at, fired, created_at.
+    """
+    with _lock:
+        conn = _connect()
+        if include_fired:
+            rows = conn.execute(
+                "SELECT id, message, fire_at, fired, created_at FROM reminders "
+                "ORDER BY fire_at ASC"
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, message, fire_at, fired, created_at FROM reminders "
+                "WHERE fired = 0 ORDER BY fire_at ASC"
+            ).fetchall()
+        conn.close()
+    return [dict(r) for r in rows]
+
+
+def mark_reminder_fired(reminder_id: int) -> None:
+    """Mark a reminder as fired so the scheduler does not fire it again."""
+    with _lock:
+        conn = _connect()
+        conn.execute(
+            "UPDATE reminders SET fired = 1 WHERE id = ?",
+            (reminder_id,),
+        )
+        conn.commit()
+        conn.close()
+
+
+def delete_reminder(reminder_id: int) -> bool:
+    """
+    Delete a reminder by id regardless of its fired state.
+
+    Returns:
+        True if a row was deleted, False if no reminder with that id exists.
+    """
+    with _lock:
+        conn = _connect()
+        cursor = conn.execute(
+            "DELETE FROM reminders WHERE id = ?", (reminder_id,)
+        )
+        conn.commit()
+        deleted = cursor.rowcount > 0
+        conn.close()
+    return deleted
