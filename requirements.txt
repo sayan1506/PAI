@@ -36,3 +36,6 @@ websocket-client>=1.8   # CDP WebSocket communication
 # Phase 9 — Multi-Provider
 openai>=1.0.0          # GitHub Models + OpenAI providers
 anthropic>=0.20.0      # Anthropic Claude provider
+
+# Phase 10 — Hardening
+pynput>=1.7.6          # Global hotkey listener (Ctrl+Shift+J activation)

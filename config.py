@@ -96,6 +96,14 @@ WEATHER_DEFAULT_LOCATION: str   = os.getenv("WEATHER_DEFAULT_LOCATION", "")
 REMINDERS_ENABLED:        bool  = os.getenv("REMINDERS_ENABLED", "True").lower() in ("true", "1", "yes")
 REMINDER_POLL_INTERVAL:   int   = int(os.getenv("REMINDER_POLL_INTERVAL", "10"))  # seconds between DB polls
 
+# ── Phase 10 — Hardening & Polish ─────────────────────────────────────────────
+SKIP_HEALTH_CHECK:   bool  = os.getenv("SKIP_HEALTH_CHECK",   "false").lower() in ("true", "1", "yes")
+HOTKEY_ENABLED:      bool  = os.getenv("HOTKEY_ENABLED",      "true").lower()  in ("true", "1", "yes")
+HOTKEY_COMBO:        str   = os.getenv("HOTKEY_COMBO",        "<ctrl>+<shift>+j")
+GEMINI_DAILY_LIMIT:  int   = int(os.getenv("GEMINI_DAILY_LIMIT",  "1000"))
+GEMINI_WARN_AT:      int   = int(os.getenv("GEMINI_WARN_AT",      "800"))
+CONFIRM_DESTRUCTIVE: bool  = os.getenv("CONFIRM_DESTRUCTIVE", "true").lower()  in ("true", "1", "yes")
+
 # Valid provider names for validation
 SUPPORTED_PROVIDERS: set = {"gemini", "ollama", "github", "anthropic", "openai"}
 

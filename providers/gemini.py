@@ -142,6 +142,8 @@ class GeminiProvider(LLMProvider):
             response_text = result.text
 
             logger.debug(f"Gemini responded: {response_text[:100]}...")
+            from core import rate_tracker
+            rate_tracker.record_request("gemini")
             return LLMResponse(content=response_text, metadata={"model": self.MODEL_NAME})
         except Exception as e:
             error_str = str(e)
@@ -174,6 +176,8 @@ class GeminiProvider(LLMProvider):
             )
 
             tool_calls = self._parse_tool_calls(result)
+            from core import rate_tracker
+            rate_tracker.record_request("gemini")
 
             # Extract text (may be empty if only tool calls returned)
             try:

@@ -9,7 +9,7 @@ Thread-safe via a module-level write lock + WAL mode.
 
 import sqlite3
 import threading
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import config
@@ -64,6 +64,14 @@ def init_db() -> None:
 
             CREATE INDEX IF NOT EXISTS idx_reminders_fire_at
                 ON reminders (fire_at) WHERE fired = 0;
+
+            CREATE TABLE IF NOT EXISTS rate_limits (
+                provider   TEXT    NOT NULL,
+                date       TEXT    NOT NULL,
+                count      INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT    NOT NULL,
+                PRIMARY KEY (provider, date)
+            );
         """)
         conn.commit()
         conn.close()
@@ -308,3 +316,49 @@ def delete_reminder(reminder_id: int) -> bool:
         deleted = cursor.rowcount > 0
         conn.close()
     return deleted
+
+
+# ── Rate Limits ───────────────────────────────────────────────────────────────
+
+def get_daily_rate_count(provider: str) -> int:
+    """
+    Return today's request count for the given provider.
+    Returns 0 if no row exists for today.
+    """
+    today = date.today().isoformat()
+    with _lock:
+        conn = _connect()
+        row = conn.execute(
+            "SELECT count FROM rate_limits WHERE provider = ? AND date = ?",
+            (provider, today),
+        ).fetchone()
+        conn.close()
+    return row["count"] if row else 0
+
+
+def increment_daily_rate_count(provider: str) -> int:
+    """
+    Increment today's request count for the given provider by 1.
+    Creates the row if it doesn't exist. Returns the new total count.
+    """
+    today = date.today().isoformat()
+    now   = _now()
+    with _lock:
+        conn = _connect()
+        conn.execute(
+            """
+            INSERT INTO rate_limits (provider, date, count, updated_at)
+                VALUES (?, ?, 1, ?)
+            ON CONFLICT(provider, date) DO UPDATE
+                SET count      = count + 1,
+                    updated_at = excluded.updated_at
+            """,
+            (provider, today, now),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT count FROM rate_limits WHERE provider = ? AND date = ?",
+            (provider, today),
+        ).fetchone()
+        conn.close()
+    return row["count"] if row else 1

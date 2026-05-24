@@ -152,6 +152,15 @@ class FileSystemTool(BaseTool):
         if not path.exists():
             return ToolResult(success=False, output="", error=f"Path not found: {path}")
 
+        from core.confirmation import needs_file_confirmation, request_confirmation
+        if needs_file_confirmation("delete"):
+            kind = "folder" if path.is_dir() else "file"
+            if not request_confirmation(f"Delete {kind}: {path}"):
+                return ToolResult(
+                    success=False, output="",
+                    error="Deletion cancelled — user did not confirm.",
+                )
+
         if path.is_file():
             path.unlink()
         elif path.is_dir():
@@ -175,6 +184,14 @@ class FileSystemTool(BaseTool):
 
         if not path.exists():
             return ToolResult(success=False, output="", error=f"Path not found: {path}")
+
+        from core.confirmation import needs_file_confirmation, request_confirmation
+        if needs_file_confirmation("move"):
+            if not request_confirmation(f"Move {path} → {dest}"):
+                return ToolResult(
+                    success=False, output="",
+                    error="Move cancelled — user did not confirm.",
+                )
 
         shutil.move(str(path), str(dest))
         return ToolResult(success=True, output=f"Moved {path} to {dest}")

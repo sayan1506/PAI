@@ -80,6 +80,15 @@ class TerminalTool(BaseTool):
                     error="Command refused: matches a blocked pattern for safety.",
                 )
 
+        # Secondary confirmation gate — risky but not absolutely denied
+        from core.confirmation import needs_terminal_confirmation, request_confirmation
+        if needs_terminal_confirmation(command):
+            if not request_confirmation(f"Run command: {command}"):
+                return ToolResult(
+                    success=False, output="",
+                    error="Command cancelled — user did not confirm.",
+                )
+
         try:
             # Use PowerShell on Windows for better command support
             from utils.platform_utils import get_platform

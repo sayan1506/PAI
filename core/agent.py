@@ -199,7 +199,9 @@ class Agent:
 
         try:
             for iteration in range(config.MAX_TOOL_ITERATIONS):
-                response = self._call_provider(self.history, tool_specs)
+                from core.timing import Timer
+                with Timer("llm"):
+                    response = self._call_provider(self.history, tool_specs)
 
                 # No tool calls → final text response
                 if not response.tool_calls:
