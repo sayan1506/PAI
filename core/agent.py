@@ -179,28 +179,32 @@ class Agent:
                 return provider.generate_with_tools(messages, tool_specs)
             return provider.generate(messages)
 
-        try:
-            return _invoke(self.provider)
-        except RateLimitError as e:
-            if config.LLM_PROVIDER != "gemini":
-                raise  # no fallback defined for non-Gemini providers
-
-            logger.warning(
-                f"Gemini rate limit reached ({e}). "
-                f"Attempting automatic fallback to Ollama."
-            )
+        def _ollama_fallback(reason: str) -> LLMResponse:
+            logger.warning(f"{reason} Attempting automatic fallback to Ollama.")
             try:
                 from providers.ollama import OllamaProvider
-                fallback = OllamaProvider()
-                result = _invoke(fallback)
+                result = _invoke(OllamaProvider())
                 logger.info("Ollama fallback succeeded for this turn.")
                 return result
             except Exception as fallback_err:
                 logger.error(f"Ollama fallback failed: {fallback_err}")
                 raise ProviderError(
-                    "Gemini rate limit reached and Ollama fallback failed. "
+                    "Gemini is unavailable and the Ollama fallback failed. "
                     "Wait a moment or switch to a different provider."
                 )
+
+        # Proactive: if Gemini's daily request budget is exhausted, skip the
+        # doomed API call and route this turn straight to Ollama.
+        from core import rate_tracker
+        if config.LLM_PROVIDER == "gemini" and rate_tracker.is_at_limit("gemini"):
+            return _ollama_fallback("Gemini daily request limit reached.")
+
+        try:
+            return _invoke(self.provider)
+        except RateLimitError as e:
+            if config.LLM_PROVIDER != "gemini":
+                raise  # no fallback defined for non-Gemini providers
+            return _ollama_fallback(f"Gemini rate limit reached ({e}).")
 
     def chat(self, user_input: str) -> str:
         """Process a user message and return the assistant's response.
@@ -231,6 +235,7 @@ class Agent:
 
         self.history.append(Message(role="user", content=user_input))
         self._trim_history()
+        turn_start = len(self.history) - 1  # index of this turn's user message
         logger.info(f"User: {user_input}")
 
         tools = get_tools()
@@ -274,14 +279,15 @@ class Agent:
             # Hit iteration limit
             reply = "I wasn't able to complete that in the available steps. Please try a simpler request."
             logger.warning("Max tool iterations reached")
+            self.history.append(Message(role="assistant", content=reply))
             return reply
 
         except RateLimitError as e:
-            self.history.pop()
+            del self.history[turn_start:]
             logger.warning(f"Rate limit (no fallback available): {e}")
             return "Rate limit reached. Please wait a moment before trying again."
         except ProviderError as e:
-            self.history.pop()
+            del self.history[turn_start:]
             logger.error(f"Provider error: {e}")
             return f"Something went wrong with the AI provider: {e}"
 

@@ -167,7 +167,7 @@ class ReminderTool(BaseTool):
         except ValueError as e:
             return ToolResult(success=False, error=str(e))
 
-        fire_at_iso = fire_at.strftime("%Y-%m-%dT%H:%M:%SZ")
+        fire_at_iso = fire_at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         reminder_id = store.add_reminder(message, fire_at_iso)
 
         # Human-readable time label
@@ -185,7 +185,7 @@ class ReminderTool(BaseTool):
             hours = minutes // 60
             time_label = f"in about {hours} hour{'s' if hours > 1 else ''}"
 
-        local_time = fire_at.strftime("%H:%M UTC")
+        local_time = fire_at.astimezone(timezone.utc).strftime("%H:%M UTC")
         output = (
             f"Reminder #{reminder_id} set: '{message}' will fire at "
             f"{local_time} ({time_label})."
