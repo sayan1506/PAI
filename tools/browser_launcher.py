@@ -63,30 +63,43 @@ _CHROME_CANDIDATES_LINUX = _CANDIDATES["chrome"]["linux"]
 
 
 class ChromeLauncher:
-    """
-    Manages a Chromium-based browser process with remote debugging.
+    """Manages a Chromium-based browser process with remote debugging.
 
-    Supports Chrome, Brave, and Edge based on config.BROWSER_APP.
-    If the browser is already running and listening on the configured port,
-    attaches without launching a new process. Otherwise launches the browser
-    using a dedicated debug profile so it doesn't conflict with existing
-    browser windows.
+    Supports Chrome, Brave, and Edge based on ``config.BROWSER_APP``. If a
+    browser is already listening on the configured remote debugging port, it
+    attaches without launching a new process. Otherwise it launches the
+    browser with a dedicated debug profile so it does not conflict with the
+    user's existing windows. Owns both the subprocess handle and the
+    ``CDPClient`` used to talk to the browser.
+
+    Attributes:
+        _proc: Handle to the launched browser process, or None when attached
+            to a pre-existing instance.
+        cdp: The ``CDPClient`` used to send DevTools commands.
     """
 
     def __init__(self):
+        """Initialize the launcher without starting a browser.
+
+        Creates an unconnected ``CDPClient`` and leaves the process handle
+        empty until ``ensure_running`` is called.
+        """
         self._proc = None
         self.cdp = CDPClient()
 
     def ensure_running(self) -> None:
-        """
-        Guarantee the browser is running and the CDP client is connected.
+        """Ensure the browser is running and the CDP client is connected.
 
-        1. If port is already reachable → just call cdp.connect().
-        2. Otherwise → find browser binary, launch with remote debugging,
-           wait for port to open, then cdp.connect().
+        If the debugging port is already reachable, simply connects the CDP
+        client. Otherwise locates the browser binary, launches it with remote
+        debugging enabled, waits for the port to open, and then connects.
 
         Raises:
-            RuntimeError if browser binary is not found or port never opens.
+            RuntimeError: If the browser binary cannot be found or the
+                debugging port never opens within the timeout.
+
+        Side Effects:
+            May spawn a browser subprocess and open a CDP connection.
         """
         if self.cdp.is_reachable():
             logger.info(
@@ -122,13 +135,15 @@ class ChromeLauncher:
         logger.info("Browser launched and CDP connected")
 
     def close(self) -> None:
-        """
-        Close the browser.
+        """Close the browser and disconnect the CDP client.
 
-        If PAI launched the process (_proc is not None), terminate it.
-        If PAI attached to an existing process (_proc is None), only
-        disconnect the CDP WebSocket — do not kill a browser the user
-        was already using.
+        Always disconnects the CDP WebSocket. If PAI launched the browser
+        (``_proc`` is set), the process is terminated (and killed if it does
+        not exit within 5 seconds). If PAI merely attached to a pre-existing
+        browser, the user's process is left running.
+
+        Side Effects:
+            May terminate or kill the launched browser process.
         """
         self.cdp.disconnect()
 
@@ -142,16 +157,17 @@ class ChromeLauncher:
             self._proc = None
 
     def _get_chrome_path(self) -> str:
-        """
-        Return the browser binary path.
+        """Return the path to the browser binary to launch.
 
-        Priority:
-          1. config.BROWSER_BINARY if non-empty
-          2. Candidates for config.BROWSER_APP (chrome/brave/edge)
-             matched against the current platform
+        Prefers ``config.BROWSER_BINARY`` when set; otherwise checks the
+        candidate paths for ``config.BROWSER_APP`` on the current platform,
+        falling back to Chrome candidates for unknown browser names.
+
+        Returns:
+            The first existing candidate binary path.
 
         Raises:
-            FileNotFoundError if no candidate is found.
+            FileNotFoundError: If no candidate binary exists on disk.
         """
         if config.BROWSER_BINARY:
             return config.BROWSER_BINARY
@@ -174,14 +190,18 @@ class ChromeLauncher:
         )
 
     def _build_launch_args(self, binary: str) -> list[str]:
-        """
-        Build the subprocess argument list for launching the browser.
+        """Build the subprocess argument list for launching the browser.
 
-        Uses a dedicated user-data-dir so that if the browser is already
-        running (without debugging), this launch creates a separate process
-        that actually binds to the remote debugging port.
+        Uses a dedicated ``user-data-dir`` under ``~/.pai`` so that, if the
+        browser is already running without debugging, this launch creates a
+        separate process that binds to the remote debugging port. Does not
+        enable headless or incognito mode.
 
-        Does NOT include --headless or --incognito.
+        Args:
+            binary: Path to the browser executable.
+
+        Returns:
+            The full argument list (binary plus flags) for ``subprocess.Popen``.
         """
         data_dir = os.path.expanduser("~/.pai/browser-debug-profile")
         return [
@@ -194,9 +214,16 @@ class ChromeLauncher:
         ]
 
     def _wait_for_port(self, timeout: int) -> None:
-        """
-        Poll cdp.is_reachable() every 0.5s until it returns True
-        or timeout seconds elapse. Raises TimeoutError on timeout.
+        """Poll until the remote debugging port becomes reachable.
+
+        Checks ``cdp.is_reachable()`` every 0.5 seconds until it succeeds or
+        the timeout elapses.
+
+        Args:
+            timeout: Maximum seconds to wait for the port to open.
+
+        Raises:
+            TimeoutError: If the port does not open within ``timeout`` seconds.
         """
         start = time.time()
         while time.time() - start < timeout:

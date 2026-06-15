@@ -32,11 +32,26 @@ class AnthropicProvider(LLMProvider):
 
     Requires config.ANTHROPIC_API_KEY. Uses config.ANTHROPIC_MODEL
     (default: "claude-sonnet-4-5"). Override with ANTHROPIC_MODEL env var.
+
+    Attributes:
+        MAX_TOKENS: Upper bound on tokens generated per response.
+        _client: The authenticated Anthropic SDK client.
     """
 
     MAX_TOKENS = 4096
 
     def __init__(self):
+        """Build the Anthropic SDK client from configuration.
+
+        Reads ``config.ANTHROPIC_API_KEY`` to construct the client and logs
+        the configured model name.
+
+        Side effects:
+            Instantiates ``anthropic.Anthropic`` and emits an info log.
+
+        Attributes set:
+            _client: The authenticated Anthropic SDK client.
+        """
         self._client = _anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
         logger.info(
             f"AnthropicProvider initialised (model: {config.ANTHROPIC_MODEL})"

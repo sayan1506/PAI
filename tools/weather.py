@@ -25,13 +25,22 @@ _SPEED_UNIT = {"metric": "m/s", "imperial": "mph"}
 
 
 class WeatherTool(BaseTool):
+    """Tool that fetches current weather from the OpenWeatherMap API.
+
+    Supports a single ``get_weather`` action that looks up conditions for a
+    city name, ``City,CountryCode``, or US ZIP code and returns a one-sentence
+    summary suitable for speaking aloud. Requires ``config.WEATHER_API_KEY``
+    and makes an outbound HTTP request to OpenWeatherMap.
+    """
 
     @property
     def name(self) -> str:
+        """Return the tool's unique identifier."""
         return "weather"
 
     @property
     def description(self) -> str:
+        """Return the LLM-facing description of this tool."""
         return (
             "Get the current weather for any city. "
             "Returns temperature, weather conditions, humidity, and wind speed "
@@ -45,6 +54,7 @@ class WeatherTool(BaseTool):
 
     @property
     def parameters(self) -> dict:
+        """Return the JSON Schema for this tool's arguments."""
         return {
             "type": "object",
             "properties": {
@@ -72,6 +82,20 @@ class WeatherTool(BaseTool):
         }
 
     def execute(self, **kwargs) -> ToolResult:
+        """Dispatch the weather action.
+
+        Only ``get_weather`` is supported; the call is forwarded to
+        ``_get_weather`` with the requested location and units (defaulting to
+        ``config.WEATHER_UNITS``).
+
+        Args:
+            **kwargs: Expects ``action`` (must be ``'get_weather'``) and
+                optionally ``location`` and ``units``.
+
+        Returns:
+            A ``ToolResult`` with the weather summary, or an error for an
+            unsupported action.
+        """
         action = kwargs.get("action", "")
         if action != "get_weather":
             return ToolResult(
@@ -84,6 +108,25 @@ class WeatherTool(BaseTool):
         )
 
     def _get_weather(self, location: str, units: str) -> ToolResult:
+        """Fetch and format current weather for a location.
+
+        Validates the API key and resolves the location (falling back to
+        ``config.WEATHER_DEFAULT_LOCATION``), queries OpenWeatherMap, handles
+        common HTTP errors, parses the response, and formats a one-sentence
+        summary with temperature, conditions, humidity, and wind speed.
+
+        Args:
+            location: City name, ``City,CountryCode``, or US ZIP code.
+            units: ``'metric'`` or ``'imperial'`` for the returned values.
+
+        Returns:
+            A ``ToolResult`` whose ``output`` is the weather summary, or an
+            error if the key is missing, the location is unknown, the request
+            fails, or the response cannot be parsed.
+
+        Side Effects:
+            Makes an outbound HTTP request to OpenWeatherMap.
+        """
         # 1. Check API key
         if not config.WEATHER_API_KEY:
             return ToolResult(

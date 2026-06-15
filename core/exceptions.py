@@ -8,9 +8,18 @@ catch-all handling at the CLI layer while allowing specific handling at lower la
 
 
 class PAIError(Exception):
-    """Base exception for all PAI errors."""
+    """Base exception for all PAI errors.
+
+    Attributes:
+        message: Human-readable description of the error.
+    """
 
     def __init__(self, message: str = ""):
+        """Store the error message and initialize the base exception.
+
+        Args:
+            message: Human-readable description of what went wrong.
+        """
         self.message = message
         super().__init__(self.message)
 

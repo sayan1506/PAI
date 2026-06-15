@@ -1,8 +1,9 @@
-"""
-voice/stt.py
+"""Faster-Whisper speech-to-text wrapper.
 
-Faster-Whisper speech-to-text wrapper.
-Accepts a complete audio buffer and returns the transcribed string.
+Provides :class:`SpeechToText`, which loads a Faster-Whisper model and
+transcribes a complete audio buffer into text. Runs locally and offline
+on CPU with int8 quantisation. The model is downloaded and cached on
+first load; size is configurable via ``STT_SIZE``.
 """
 
 import numpy as np
@@ -13,14 +14,19 @@ import config
 
 
 class SpeechToText:
-    """
-    Wraps Faster-Whisper for local, offline transcription.
+    """Wraps Faster-Whisper for local, offline transcription.
 
-    The model is downloaded on first use and cached locally.
-    Supported sizes: tiny, base, small, medium, large-v3
+    The model is downloaded on first use and cached locally. Loading is
+    separated from construction so model download can be controlled
+    explicitly.
+
+    Attributes:
+        model_size: Whisper model size to load (from ``STT_SIZE``).
+            Supported sizes: tiny, base, small, medium, large-v3.
     """
 
     def __init__(self):
+        """Initialise with the configured model size; no model loaded yet."""
         self._model = None
         self.model_size = config.STT_SIZE
 

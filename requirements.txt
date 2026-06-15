@@ -8,7 +8,7 @@ pytest>=8.0.0
 pytest-mock>=3.12.0
 hypothesis>=6.0.0
 
-# Voice — Phase 2
+# Voice
 pyaudio>=0.2.14
 sounddevice>=0.4.6
 numpy>=1.26.0
@@ -16,26 +16,26 @@ silero-vad>=5.1
 faster-whisper>=1.0.0
 openwakeword>=0.6.0
 
-# Tools — Phase 3
+# Tools
 psutil>=5.9.0
 
-# Browser + Vision — Phase 4
+# Browser + Vision
 pyautogui>=0.9.54
 pygetwindow>=0.0.9
 mss>=9.0.1
 
-# Phase 6: TTS and Output
+# TTS and Output
 kokoro>=0.9.2
 soundfile>=0.12.1
 pyttsx3>=2.90
 plyer>=2.1.0
 
-# Phase 7 — Browser Control
+# Browser Control
 websocket-client>=1.8   # CDP WebSocket communication
 
-# Phase 9 — Multi-Provider
+# Multi-Provider
 openai>=1.0.0          # GitHub Models + OpenAI providers
 anthropic>=0.20.0      # Anthropic Claude provider
 
-# Phase 10 — Hardening
+# Hardening
 pynput>=1.7.6          # Global hotkey listener (Ctrl+Shift+J activation)

@@ -1,7 +1,7 @@
 """
 Property-based tests for Ollama message formatting.
 
-Feature: pai-phase1-foundation
+Feature: Core Foundation
 """
 
 from unittest.mock import MagicMock, patch

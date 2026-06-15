@@ -19,9 +19,22 @@ class OllamaProvider(LLMProvider):
 
     Communicates with a running Ollama instance via its REST API.
     Reads host and model configuration from the config module.
+
+    Attributes:
+        base_url: Base URL of the Ollama server (from ``config.OLLAMA_HOST``).
+        model: Name of the Ollama model to use (from ``config.OLLAMA_MODEL``).
     """
 
     def __init__(self):
+        """Read host and model from config and store them on the instance.
+
+        Side effects:
+            Emits an info log recording the configured endpoint and model.
+
+        Attributes set:
+            base_url: The Ollama server URL.
+            model: The Ollama model name.
+        """
         self.base_url = config.OLLAMA_HOST
         self.model = config.OLLAMA_MODEL
         logger.info(f"OllamaProvider initialised: {self.base_url} | model: {self.model}")
@@ -32,12 +45,18 @@ class OllamaProvider(LLMProvider):
         return self.model
 
     def _build_messages(self, messages: list[Message]) -> list[dict]:
-        """Convert Message list to Ollama's chat format.
+        """Convert a Message list to Ollama's chat format.
 
         Handles three message types:
         - user/assistant text messages
         - assistant messages with tool_calls → includes tool_calls array
         - tool result messages → role "tool" with content
+
+        Args:
+            messages: The conversation history as internal Message objects.
+
+        Returns:
+            A list of Ollama chat message dicts.
         """
         ollama_messages = []
         for msg in messages:
@@ -73,7 +92,15 @@ class OllamaProvider(LLMProvider):
         return ollama_messages
 
     def _build_ollama_tools(self, tool_specs: list[dict]) -> list[dict]:
-        """Convert tool specs to Ollama's tool format (OpenAI-compatible)."""
+        """Convert tool specs to Ollama's tool format (OpenAI-compatible).
+
+        Args:
+            tool_specs: PAI tool specs, each with ``name``, ``description``,
+                and ``parameters`` keys.
+
+        Returns:
+            A list of tool dicts wrapped in the OpenAI function envelope.
+        """
         return [
             {
                 "type": "function",
@@ -197,7 +224,14 @@ class OllamaProvider(LLMProvider):
             raise ProviderError(f"Ollama tool call error: {e}")
 
     def health_check(self) -> bool:
-        """Verify Ollama is reachable by hitting the /api/tags endpoint."""
+        """Verify Ollama is reachable by hitting the /api/tags endpoint.
+
+        Returns:
+            True if the endpoint responds successfully.
+
+        Raises:
+            ProviderError: If Ollama is unreachable or the request fails.
+        """
         try:
             resp = requests.get(f"{self.base_url}/api/tags", timeout=5)
             resp.raise_for_status()

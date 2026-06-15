@@ -16,7 +16,20 @@ from utils.platform_utils import get_platform, open_app_command, find_app_path, 
 
 
 class AppLauncherTool(BaseTool):
-    """Application launcher and manager tool."""
+    """Tool for launching, closing, and querying desktop applications.
+
+    Resolves friendly app names (e.g. ``"chrome"``) to platform-specific
+    executables via ``APP_ALIASES`` and dispatches a single ``operation``
+    argument to a matching ``_op_*`` handler. On Windows it can also launch
+    UWP/Store apps through the shell ``AppsFolder`` protocol. Gated by
+    ``config.ENABLE_APP_LAUNCHER``; uses ``psutil`` to enumerate and
+    terminate processes.
+
+    Attributes:
+        APP_ALIASES: Per-platform mapping of friendly names to executable
+            names used by ``_resolve_app_name``.
+        UWP_PROTOCOLS: Known UWP/Store apps reachable via a shell protocol.
+    """
 
     # Cross-platform app name aliases
     APP_ALIASES = {
@@ -97,10 +110,12 @@ class AppLauncherTool(BaseTool):
 
     @property
     def name(self) -> str:
+        """Return the tool's unique identifier."""
         return "app_launcher"
 
     @property
     def description(self) -> str:
+        """Return the LLM-facing description of this tool."""
         return (
             "Launch, close, or check the status of desktop applications. "
             "Use 'launch' to open an app by name, 'close' to quit it, "
@@ -110,6 +125,7 @@ class AppLauncherTool(BaseTool):
 
     @property
     def parameters(self) -> dict:
+        """Return the JSON Schema for this tool's arguments."""
         return {
             "type": "object",
             "properties": {
@@ -127,7 +143,20 @@ class AppLauncherTool(BaseTool):
         }
 
     def execute(self, **kwargs) -> ToolResult:
-        """Execute an app launcher operation."""
+        """Execute an app launcher operation.
+
+        Reads the ``operation`` argument and dispatches to the matching
+        ``_op_<operation>`` handler.
+
+        Args:
+            **kwargs: Operation arguments. ``operation`` selects the action
+                (``launch``, ``close``, ``list_running``, ``is_running``) and
+                ``app_name`` names the target where applicable.
+
+        Returns:
+            A ``ToolResult``. Failure is returned (not raised) when the tool
+            is disabled, the operation is unknown, or the handler raises.
+        """
         if not config.ENABLE_APP_LAUNCHER:
             return ToolResult(success=False, output="", error="App launcher is disabled.")
 
@@ -142,7 +171,17 @@ class AppLauncherTool(BaseTool):
             return ToolResult(success=False, output="", error=str(e))
 
     def _resolve_app_name(self, app_name: str) -> str:
-        """Resolve an app name using platform-specific aliases."""
+        """Resolve a friendly app name to a platform executable name.
+
+        Looks up the lowercased name in ``APP_ALIASES`` for the current
+        platform, returning the original name unchanged if no alias matches.
+
+        Args:
+            app_name: The user-supplied application name.
+
+        Returns:
+            The resolved executable/command name, or ``app_name`` if unknown.
+        """
         platform = get_platform()
         aliases = self.APP_ALIASES.get(platform, {})
         return aliases.get(app_name.lower(), app_name)
@@ -154,7 +193,22 @@ class AppLauncherTool(BaseTool):
     }
 
     def _op_launch(self, **kwargs) -> ToolResult:
-        """Launch an application by name."""
+        """Launch an application by name.
+
+        Resolves the name to an executable, then tries, in order: a direct
+        path launch, UWP shell activation for ``WindowsApps`` paths, and a
+        UWP app-id lookup. Reports failure if none succeed.
+
+        Args:
+            **kwargs: Expects ``app_name``.
+
+        Returns:
+            A ``ToolResult`` confirming the launch, or an error if the name is
+            missing or the application could not be found.
+
+        Side Effects:
+            Spawns the application as a detached subprocess.
+        """
         app_name = kwargs.get("app_name", "")
         if not app_name:
             return ToolResult(success=False, error="No app_name provided.")
@@ -221,7 +275,21 @@ class AppLauncherTool(BaseTool):
             return ToolResult(success=False, error=f"Failed to launch {app_name}: {e}")
 
     def _op_close(self, **kwargs) -> ToolResult:
-        """Close an application by killing matching processes."""
+        """Close an application by terminating matching processes.
+
+        Resolves the name, then terminates every running process whose name
+        contains the resolved value (case-insensitive).
+
+        Args:
+            **kwargs: Expects ``app_name``.
+
+        Returns:
+            A ``ToolResult`` reporting how many processes were terminated, or
+            an error if the name is missing or nothing matched.
+
+        Side Effects:
+            Sends terminate signals to matching OS processes.
+        """
         app_name = kwargs.get("app_name", "")
         if not app_name:
             return ToolResult(success=False, output="", error="No app_name provided.")
@@ -243,7 +311,17 @@ class AppLauncherTool(BaseTool):
         return ToolResult(success=True, output=f"Closed {killed} process(es) matching '{app_name}'.")
 
     def _op_list_running(self, **kwargs) -> ToolResult:
-        """List names of all running processes (deduplicated)."""
+        """List the names of all running processes.
+
+        Names are deduplicated and sorted alphabetically.
+
+        Args:
+            **kwargs: Unused.
+
+        Returns:
+            A ``ToolResult`` whose ``output`` is the newline-joined process
+            names (or ``(no processes found)``).
+        """
         names = set()
         for proc in psutil.process_iter(["name"]):
             try:
@@ -257,7 +335,15 @@ class AppLauncherTool(BaseTool):
         return ToolResult(success=True, output=output)
 
     def _op_is_running(self, **kwargs) -> ToolResult:
-        """Check if a specific application is running."""
+        """Check whether a specific application is currently running.
+
+        Args:
+            **kwargs: Expects ``app_name``.
+
+        Returns:
+            A ``ToolResult`` stating whether the app is running, or an error
+            if the name is missing. The check itself always succeeds.
+        """
         app_name = kwargs.get("app_name", "")
         if not app_name:
             return ToolResult(success=False, output="", error="No app_name provided.")

@@ -1,8 +1,10 @@
-"""
-utils/platform_utils.py
+"""Cross-platform helpers for system operations.
 
-Cross-platform helpers for system operations.
-All platform branching lives here — tools stay platform-agnostic.
+All OS-specific branching is centralised here so the rest of the codebase
+(tools, agents) can stay platform-agnostic. Covers platform detection,
+launching and killing applications, resolving installed apps to executable
+paths (Windows registry / Linux ``.desktop`` files), and locating well-known
+user directories including OneDrive-backed folders on Windows.
 """
 
 import sys
@@ -14,16 +16,24 @@ from pathlib import Path
 
 
 def get_platform() -> str:
-    """Return 'windows' or 'linux'."""
+    """Return the current platform family.
+
+    Returns:
+        ``"windows"`` on Win32, otherwise ``"linux"``.
+    """
     return "windows" if sys.platform == "win32" else "linux"
 
 
 def open_app_command(app_name: str) -> list[str]:
-    """
-    Return the subprocess command list to launch an application by name.
+    """Build the subprocess command to launch an application by name.
 
-    Windows: ['cmd', '/c', 'start', '', app_name]
-    Linux:   ['xdg-open', app_name]
+    Args:
+        app_name: The application or document to open.
+
+    Returns:
+        A command list suitable for :func:`subprocess.run`/``Popen``.
+        Windows uses ``['cmd', '/c', 'start', '', app_name]``; Linux uses
+        ``['xdg-open', app_name]``.
     """
     if get_platform() == "windows":
         return ["cmd", "/c", "start", "", app_name]
@@ -31,24 +41,44 @@ def open_app_command(app_name: str) -> list[str]:
 
 
 def kill_app_command(process_name: str) -> list[str]:
-    """Return the command to kill a named process."""
+    """Build the subprocess command to kill a named process.
+
+    Args:
+        process_name: The process/image name to terminate.
+
+    Returns:
+        A command list: ``taskkill`` on Windows, ``pkill`` on Linux.
+    """
     if get_platform() == "windows":
         return ["taskkill", "/F", "/IM", process_name]
     return ["pkill", "-f", process_name]
 
 
 def shell() -> str:
-    """Return the shell to use for terminal commands."""
+    """Return the shell to use for terminal commands.
+
+    Returns:
+        ``"powershell"`` on Windows, ``"bash"`` on Linux.
+    """
     return "powershell" if get_platform() == "windows" else "bash"
 
 
 def home_dir() -> Path:
-    """Return the user's home directory as a Path."""
+    """Return the user's home directory.
+
+    Returns:
+        The home directory as a :class:`pathlib.Path`.
+    """
     return Path.home()
 
 
 def desktop_dir() -> Path:
-    """Return the Desktop path (best-effort cross-platform)."""
+    """Return the user's Desktop directory, best-effort.
+
+    Returns:
+        The ``Desktop`` path under home if it exists, otherwise the home
+        directory itself.
+    """
     home = home_dir()
     candidate = home / "Desktop"
     return candidate if candidate.exists() else home
@@ -57,12 +87,20 @@ def desktop_dir() -> Path:
 # ── Windows App Resolution ────────────────────────────────────────────────────
 
 def _find_app_windows(app_name: str) -> str | None:
-    """
-    Resolve an application name to a full executable path on Windows.
+    """Resolve an application name to a full executable path on Windows.
 
     Search order:
-      1. Registry App Paths (Steam, Discord, Spotify, Epic all register here)
-      2. Common install directories (Program Files, LocalAppData\\Programs)
+        1. Registry ``App Paths`` keys under HKLM and HKCU, including the
+           WOW6432Node mirror (Steam, Discord, Spotify, Epic register here).
+        2. Common install directories (Program Files, ``LocalAppData\\Programs``).
+        3. Top-level ``AppData\\Local`` app folders (Discord, WhatsApp, Postman
+           install directly here), matched by name to avoid a slow full scan.
+
+    Args:
+        app_name: Application name, with or without a ``.exe`` suffix.
+
+    Returns:
+        The resolved executable path string, or None if not found.
     """
     import winreg
 
@@ -123,13 +161,20 @@ _DESKTOP_DIRS = [
 
 
 def _find_app_linux(app_name: str) -> str | None:
-    """
-    Resolve an application name to a launch command on Linux.
+    """Resolve an application name to a launch command on Linux.
 
     Search order:
-      1. which — binary already in PATH
-      2. .desktop file scan — covers Snap, Flatpak, and manually installed apps
-      3. Common binary directories
+        1. ``shutil.which`` — the binary is already on PATH.
+        2. ``.desktop`` file scan across system, Snap, Flatpak, and per-user
+           application directories, matching on the entry ``Name`` or the file
+           stem and extracting the ``Exec`` binary.
+        3. Common binary directories (``/opt``, ``/usr/local/bin``, ``/usr/games``).
+
+    Args:
+        app_name: The application name to resolve.
+
+    Returns:
+        A binary path or launch command string, or None if not found.
     """
     # 1. which — fastest check
     found = shutil.which(app_name)
@@ -174,12 +219,16 @@ def _find_app_linux(app_name: str) -> str | None:
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def find_app_path(app_name: str) -> str | None:
-    """
-    Resolve an application name to a full executable path or launch command.
+    """Resolve an application name to a full path or launch command.
+
+    Dispatches to the Windows or Linux resolver based on the current platform.
+
+    Args:
+        app_name: The application name to resolve.
 
     Returns:
-        Full path string if found, None if not found.
-        Callers should fall back to open_app_command() on None.
+        The resolved path/command string if found, or None. Callers should
+        fall back to :func:`open_app_command` when None is returned.
     """
     if get_platform() == "windows":
         return _find_app_windows(app_name)
@@ -187,14 +236,18 @@ def find_app_path(app_name: str) -> str | None:
 
 
 def find_uwp_app_id(app_name: str) -> str | None:
-    """
-    Find the AppUserModelId for a Windows Store/UWP app by name.
+    """Find the AppUserModelId for a Windows Store / UWP app by name.
 
-    These apps cannot be launched by running their .exe directly —
-    they must be launched via: explorer.exe shell:AppsFolder\\<AppId>
+    UWP apps cannot be launched by running their ``.exe`` directly; they must
+    be launched via ``explorer.exe shell:AppsFolder\\<AppId>``. This queries
+    PowerShell's ``Get-StartApps`` for the first name match.
+
+    Args:
+        app_name: A substring of the app's display name to match.
 
     Returns:
-        AppUserModelId string if found, None otherwise.
+        The AppUserModelId string if found, or None (also None on non-Windows
+        platforms, on timeout, or on any query failure).
     """
     if get_platform() != "windows":
         return None
@@ -217,16 +270,29 @@ def find_uwp_app_id(app_name: str) -> str | None:
 
 
 def special_dirs() -> dict[str, Path]:
-    """
-    Return a dict of well-known user directories.
+    """Return a mapping of well-known user directories.
 
-    Keys: 'home', 'desktop', 'documents', 'downloads'
-    Values: resolved Path objects (fallback to home if dir doesn't exist)
+    On Windows, OneDrive-backed copies of these folders (e.g.
+    ``~/OneDrive/Desktop``) take precedence when present. Any directory that
+    cannot be located falls back to the home directory.
+
+    Returns:
+        A dict with keys ``home``, ``desktop``, ``documents``, and
+        ``downloads`` mapping to resolved :class:`pathlib.Path` objects.
     """
     home = Path.home()
 
     def _resolve(name: str) -> Path:
-        # Check OneDrive path first (Windows with OneDrive backup)
+        """Resolve a named user folder, preferring a OneDrive-backed copy.
+
+        Args:
+            name: The folder name (e.g. ``"Documents"``).
+
+        Returns:
+            The OneDrive path if present, else the home-relative path if it
+            exists, else the home directory.
+        """
+        # Prefer the OneDrive-backed copy when Windows backup is enabled.
         onedrive = home / "OneDrive" / name
         if onedrive.exists():
             return onedrive

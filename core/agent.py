@@ -22,7 +22,15 @@ Only call a tool when necessary. For conversational questions, respond directly 
 
 
 def _build_system_prompt() -> str:
-    """Build the system prompt with real directory paths for the LLM."""
+    """Build the system prompt with the user's real directory paths.
+
+    Resolves platform-specific special directories (home, desktop, documents,
+    downloads) and interpolates them, along with the configured agent name,
+    into the instruction template that governs tool usage.
+
+    Returns:
+        The fully rendered system prompt string for the LLM.
+    """
     from utils.platform_utils import special_dirs
     dirs = special_dirs()
     return f"""You are {config.AGENT_NAME}, a personal AI assistant running locally on the user's computer.
@@ -53,9 +61,32 @@ User's directory paths (use these exact paths when the user mentions a named loc
 
 
 class Agent:
-    """Core conversation controller that manages message history and delegates to an LLM provider."""
+    """Core conversation controller that drives the LLM tool-calling loop.
+
+    The Agent owns the running message history, injects a system prompt and
+    optional per-turn memory context, sends turns to an :class:`LLMProvider`,
+    executes any tool calls the model requests, and feeds the results back
+    until a final text answer is produced. It also trims history to bound
+    context size and recovers from provider rate limits and errors.
+
+    Attributes:
+        provider: The configured LLM provider used to generate responses.
+        history: Ordered list of conversation messages, beginning with the
+            primed system-prompt pair, that is sent to the provider each turn.
+    """
 
     def __init__(self, provider: LLMProvider):
+        """Initialize the agent, prime the system prompt, and set up memory.
+
+        Seeds ``history`` with the system-prompt message pair and, when
+        ``config.MEMORY_ENABLED`` is set, initializes the memory store.
+
+        Args:
+            provider: The LLM provider used to generate responses for each turn.
+
+        Side effects:
+            Initializes the memory database and writes startup log entries.
+        """
         self.provider = provider
         self.history: list[Message] = []
         self._init_system_prompt()
@@ -65,7 +96,15 @@ class Agent:
         logger.info("Agent initialised")
 
     def _init_system_prompt(self):
-        """Add system context as a user message and a primed assistant response."""
+        """Seed history with the system context and a primed assistant reply.
+
+        Appends a user message carrying the rendered system prompt followed by
+        a short canned assistant acknowledgement, so the model treats the
+        instructions as established context.
+
+        Side effects:
+            Mutates ``self.history`` in place.
+        """
         prompt = _build_system_prompt()
         self.history.append(Message(role="user", content=prompt))
         self.history.append(

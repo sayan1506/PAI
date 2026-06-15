@@ -23,6 +23,14 @@ class OpenAIProvider(_OpenAICompatBase):
     """
 
     def __init__(self):
+        """Log initialisation of the OpenAI provider.
+
+        Configuration is read lazily inside ``_make_client`` on each request,
+        so the constructor only records the configured model name.
+
+        Side effects:
+            Emits an info log with the configured model.
+        """
         logger.info(
             f"OpenAIProvider initialised (model: {config.OPENAI_MODEL})"
         )
@@ -38,5 +46,8 @@ class OpenAIProvider(_OpenAICompatBase):
 
         Called on every request so OPENAI_API_KEY changes in tests are
         always picked up.
+
+        Returns:
+            An ``OpenAI`` client authenticated with ``config.OPENAI_API_KEY``.
         """
         return OpenAI(api_key=config.OPENAI_API_KEY)

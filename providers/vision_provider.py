@@ -17,11 +17,23 @@ from core.logger import logger
 
 
 class VisionProvider(ABC):
-    """Abstract base for vision model providers."""
+    """Abstract base for vision model providers.
+
+    Subclasses send raw image bytes plus a text prompt to a vision-capable
+    model and return the model's textual description.
+    """
 
     @abstractmethod
     def describe(self, image_bytes: bytes, prompt: str) -> str:
-        """Send image bytes to the vision model and return its text response."""
+        """Send image bytes to the vision model and return its text response.
+
+        Args:
+            image_bytes: Raw encoded image data (e.g. PNG or JPEG bytes).
+            prompt: Instruction describing what to extract from the image.
+
+        Returns:
+            The model's textual description of the image.
+        """
         ...
 
 
@@ -29,6 +41,18 @@ class GeminiVisionProvider(VisionProvider):
     """Uses Gemini Flash for vision (already authenticated via GEMINI_API_KEY)."""
 
     def describe(self, image_bytes: bytes, prompt: str) -> str:
+        """Describe an image using the Gemini Flash vision model.
+
+        Configures the google-generativeai SDK with ``config.GEMINI_API_KEY``,
+        decodes the bytes into a PIL image, and sends it with the prompt.
+
+        Args:
+            image_bytes: Raw encoded image data.
+            prompt: Instruction describing what to extract from the image.
+
+        Returns:
+            The stripped text content of the model's response.
+        """
         import google.generativeai as genai
         genai.configure(api_key=config.GEMINI_API_KEY)
         model = genai.GenerativeModel("gemini-2.0-flash")
@@ -44,6 +68,20 @@ class OllamaVisionProvider(VisionProvider):
     """
 
     def describe(self, image_bytes: bytes, prompt: str) -> str:
+        """Describe an image using a local Ollama vision model.
+
+        Base64-encodes the image, POSTs it with the prompt to the Ollama
+        ``/api/generate`` endpoint with streaming disabled, and returns the
+        response text. All processing stays on the local machine.
+
+        Args:
+            image_bytes: Raw encoded image data.
+            prompt: Instruction describing what to extract from the image.
+
+        Returns:
+            The stripped ``response`` field from the Ollama reply, or an empty
+            string if absent.
+        """
         b64 = base64.b64encode(image_bytes).decode("utf-8")
         payload = json.dumps({
             "model": config.VISION_MODEL,
@@ -64,7 +102,15 @@ class OllamaVisionProvider(VisionProvider):
 
 
 def get_vision_provider() -> VisionProvider:
-    """Return the configured vision provider instance."""
+    """Return the configured vision provider instance.
+
+    Selects the backend from ``config.VISION_PROVIDER``: "ollama" yields a
+    local ``OllamaVisionProvider``; any other value falls back to the
+    cloud ``GeminiVisionProvider``.
+
+    Returns:
+        An instantiated ``VisionProvider`` for the configured backend.
+    """
     provider = config.VISION_PROVIDER.lower()
     if provider == "ollama":
         logger.info(f"Vision: using Ollama ({config.VISION_MODEL}) — local/private")

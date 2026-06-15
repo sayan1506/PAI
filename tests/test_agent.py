@@ -1,8 +1,8 @@
 """
 Property-based tests for Agent conversation invariants.
 
-Feature: pai-phase1-foundation, Property 4: Agent chat preserves conversation invariants
-Feature: pai-phase1-foundation, Property 5: History trimming preserves system prompt and respects bounds
+Feature: Core Foundation, Property 4: Agent chat preserves conversation invariants
+Feature: Core Foundation, Property 5: History trimming preserves system prompt and respects bounds
 """
 
 from unittest.mock import MagicMock, patch

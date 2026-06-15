@@ -27,13 +27,25 @@ from memory import store
 
 
 class ReminderTool(BaseTool):
+    """Tool for setting, listing, and cancelling time-based reminders.
+
+    Dispatches a single ``action`` argument to handlers for creating a
+    reminder, listing pending ones, and cancelling by id or fuzzy message
+    match. Reminders are stored in SQLite via the ``store`` module and fire as
+    desktop notifications, persisting across PAI restarts. The ``'when'``
+    value accepts relative durations (``'10m'``, ``'2h'``, ``'30s'``) or an
+    ISO 8601 UTC timestamp. Gated by ``config.REMINDERS_ENABLED`` at
+    registration time.
+    """
 
     @property
     def name(self) -> str:
+        """Return the tool's unique identifier."""
         return "reminder"
 
     @property
     def description(self) -> str:
+        """Return the LLM-facing description of this tool."""
         return (
             "Set, list, and cancel time-based reminders. "
             "Reminders fire as desktop notifications at the specified time. "
@@ -49,6 +61,7 @@ class ReminderTool(BaseTool):
 
     @property
     def parameters(self) -> dict:
+        """Return the JSON Schema for this tool's arguments."""
         return {
             "type": "object",
             "properties": {
@@ -80,7 +93,20 @@ class ReminderTool(BaseTool):
         }
 
     def execute(self, **kwargs) -> ToolResult:
-        """Route to the correct action handler. Wraps all exceptions."""
+        """Route a reminder action to its handler.
+
+        Dispatches on the ``action`` argument and catches all exceptions,
+        returning them as failed results rather than raising.
+
+        Args:
+            **kwargs: Expects ``action`` (``'set'``, ``'list'``, or
+                ``'cancel'``) plus action-specific keys (``when``,
+                ``message``, ``id``).
+
+        Returns:
+            The ``ToolResult`` from the selected handler, or an error result
+            for an unknown action or any raised exception.
+        """
         action = kwargs.get("action", "")
         try:
             if action == "set":
@@ -104,6 +130,24 @@ class ReminderTool(BaseTool):
     # ── Action handlers ────────────────────────────────────────────────────
 
     def _set(self, when: str, message: str) -> ToolResult:
+        """Schedule a new reminder.
+
+        Parses ``when`` into an absolute UTC time, stores the reminder, and
+        builds a human-readable confirmation with a relative time label.
+
+        Args:
+            when: Relative duration (``'10m'``, ``'2h'``, ``'30s'``) or ISO
+                8601 UTC timestamp.
+            message: What to remind the user about.
+
+        Returns:
+            A ``ToolResult`` confirming the reminder (with its id and fire
+            time), or an error if ``when``/``message`` is missing or ``when``
+            cannot be parsed.
+
+        Side Effects:
+            Persists the reminder via ``store.add_reminder``.
+        """
         when = when.strip()
         message = message.strip()
 
@@ -150,6 +194,15 @@ class ReminderTool(BaseTool):
         return ToolResult(success=True, output=output)
 
     def _list(self) -> ToolResult:
+        """List all pending (not-yet-fired) reminders.
+
+        Each entry shows the reminder id, message, absolute fire time, and
+        minutes remaining.
+
+        Returns:
+            A ``ToolResult`` whose ``output`` is the newline-joined reminders,
+            or a message noting there are none.
+        """
         reminders = store.all_reminders(include_fired=False)
         if not reminders:
             return ToolResult(success=True, output="You have no pending reminders.")
@@ -169,6 +222,23 @@ class ReminderTool(BaseTool):
         return ToolResult(success=True, output="\n".join(lines))
 
     def _cancel(self, reminder_id: int | None, message: str) -> ToolResult:
+        """Cancel a reminder by id or by fuzzy message match.
+
+        If ``reminder_id`` is given, that specific reminder is deleted.
+        Otherwise, if ``message`` is given, the first pending reminder whose
+        message contains it (case-insensitive) is deleted.
+
+        Args:
+            reminder_id: Integer id of the reminder to cancel, or None.
+            message: Partial message text to match when no id is provided.
+
+        Returns:
+            A ``ToolResult`` confirming the cancellation, or an error if
+            nothing matched or neither argument was supplied.
+
+        Side Effects:
+            Deletes the matched reminder via ``store.delete_reminder``.
+        """
         if reminder_id is not None:
             deleted = store.delete_reminder(int(reminder_id))
             if deleted:
@@ -204,18 +274,24 @@ class ReminderTool(BaseTool):
     # ── Time parsing ───────────────────────────────────────────────────────
 
     def _parse_when(self, when: str) -> datetime:
-        """
-        Parse a 'when' string into an absolute UTC datetime.
+        """Parse a 'when' string into an absolute UTC datetime.
 
         Accepted formats:
-          - "Nm"  → now + N minutes  (e.g. "10m", "5m")
-          - "Nh"  → now + N hours    (e.g. "2h", "1h")
-          - "Ns"  → now + N seconds  (e.g. "30s", "90s")
-          - ISO 8601 UTC string ending in "Z" or "+00:00" → parsed directly
+          - ``"Nm"`` → now + N minutes  (e.g. ``"10m"``, ``"5m"``)
+          - ``"Nh"`` → now + N hours    (e.g. ``"2h"``, ``"1h"``)
+          - ``"Ns"`` → now + N seconds  (e.g. ``"30s"``, ``"90s"``)
+          - ISO 8601 UTC string ending in ``"Z"`` or ``"+00:00"`` → parsed
+            directly (naive timestamps are assumed to be UTC)
+
+        Args:
+            when: The raw ``when`` string to parse.
+
+        Returns:
+            The resolved absolute UTC ``datetime``.
 
         Raises:
-            ValueError with a descriptive message if the format is unrecognised
-            or N is not a positive integer.
+            ValueError: If the format is unrecognised or N is not a positive
+                integer.
         """
         when = when.strip()
         now = datetime.now(timezone.utc)

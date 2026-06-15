@@ -35,6 +35,14 @@ class GitHubModelsProvider(_OpenAICompatBase):
     """
 
     def __init__(self):
+        """Log initialisation of the GitHub Models provider.
+
+        Configuration is read lazily inside ``_make_client`` on each request,
+        so the constructor only records the configured model and endpoint.
+
+        Side effects:
+            Emits an info log with the configured model and endpoint URL.
+        """
         logger.info(
             f"GitHubModelsProvider initialised "
             f"(model: {config.GITHUB_MODEL}, endpoint: {_GITHUB_BASE_URL})"
@@ -51,6 +59,10 @@ class GitHubModelsProvider(_OpenAICompatBase):
 
         Called on every request so that GITHUB_TOKEN changes in config (e.g.
         during tests using monkeypatch) are always picked up.
+
+        Returns:
+            An ``OpenAI`` client whose ``base_url`` targets GitHub Models and
+            whose key is ``config.GITHUB_TOKEN``.
         """
         return OpenAI(
             base_url=_GITHUB_BASE_URL,

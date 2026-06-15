@@ -96,7 +96,7 @@ WEATHER_DEFAULT_LOCATION: str   = os.getenv("WEATHER_DEFAULT_LOCATION", "")
 REMINDERS_ENABLED:        bool  = os.getenv("REMINDERS_ENABLED", "True").lower() in ("true", "1", "yes")
 REMINDER_POLL_INTERVAL:   int   = int(os.getenv("REMINDER_POLL_INTERVAL", "10"))  # seconds between DB polls
 
-# ── Phase 10 — Hardening & Polish ─────────────────────────────────────────────
+# ── Hardening & Polish ────────────────────────────────────────────────────────
 SKIP_HEALTH_CHECK:   bool  = os.getenv("SKIP_HEALTH_CHECK",   "false").lower() in ("true", "1", "yes")
 HOTKEY_ENABLED:      bool  = os.getenv("HOTKEY_ENABLED",      "true").lower()  in ("true", "1", "yes")
 HOTKEY_COMBO:        str   = os.getenv("HOTKEY_COMBO",        "<ctrl>+<shift>+j")

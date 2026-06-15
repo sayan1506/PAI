@@ -28,14 +28,23 @@ DENIED_PATTERNS = [
 
 
 class TerminalTool(BaseTool):
-    """Shell command execution tool."""
+    """Tool for executing shell commands and returning their output.
+
+    Disabled by default (``config.ENABLE_TERMINAL``) for safety. Commands are
+    first checked against ``DENIED_PATTERNS`` and always refused on a match;
+    surviving commands deemed risky may require interactive confirmation.
+    Commands run through PowerShell on Windows and the system shell elsewhere,
+    with a 30-second timeout.
+    """
 
     @property
     def name(self) -> str:
+        """Return the tool's unique identifier."""
         return "terminal"
 
     @property
     def description(self) -> str:
+        """Return the LLM-facing description of this tool."""
         return (
             "Execute a shell command and return its output. "
             "Use for developer tasks: checking versions, running scripts, "
@@ -46,6 +55,7 @@ class TerminalTool(BaseTool):
 
     @property
     def parameters(self) -> dict:
+        """Return the JSON Schema for this tool's arguments."""
         return {
             "type": "object",
             "properties": {
@@ -58,7 +68,26 @@ class TerminalTool(BaseTool):
         }
 
     def execute(self, **kwargs) -> ToolResult:
-        """Execute a shell command."""
+        """Execute a shell command and capture its output.
+
+        Refuses to run when the tool is disabled, when the command is empty,
+        or when it matches a blocked pattern. Risky commands may require
+        interactive confirmation. The command runs through PowerShell on
+        Windows and the default shell elsewhere, with combined stdout/stderr
+        captured and a 30-second timeout.
+
+        Args:
+            **kwargs: Expects ``command``, the shell command string to run.
+
+        Returns:
+            A ``ToolResult`` whose ``output`` is the command's combined
+            output and whose ``success`` reflects a zero exit code; failures
+            (disabled, blocked, declined, timeout, exception) are returned as
+            errors rather than raised.
+
+        Side Effects:
+            Runs an arbitrary shell command on the host system.
+        """
         if not config.ENABLE_TERMINAL:
             return ToolResult(
                 success=False,

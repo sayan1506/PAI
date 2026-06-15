@@ -26,9 +26,31 @@ from core.logger import logger
 
 
 class ConversationOverlay:
-    """Thread-safe conversation overlay using tkinter in a daemon thread."""
+    """Thread-safe, always-on-top conversation overlay built on tkinter.
+
+    Renders the most recent user phrase and PAI response in a borderless
+    window in the bottom-right of the screen. The tkinter event loop runs in
+    a daemon thread; callers push updates from any thread via a
+    :class:`queue.Queue`, and the overlay drains the queue on a 100ms timer.
+
+    The overlay degrades gracefully: if disabled by configuration or if no
+    display/tkinter backend is available, every method becomes a no-op.
+
+    Attributes:
+        _queue: Thread-safe channel carrying ``(user_text, pai_text)`` tuples,
+            or a ``None`` sentinel signalling shutdown.
+        _thread: The daemon thread running tkinter's mainloop, or None.
+        _root: The tkinter root window, or None until the thread starts.
+        _enabled: Whether the overlay is active; cleared if startup fails.
+        _running: Whether the overlay thread is currently running.
+    """
 
     def __init__(self) -> None:
+        """Initialise overlay state without creating any window.
+
+        Reads ``config.OVERLAY_ENABLED`` to decide whether the overlay is
+        active. No tkinter resources are allocated until :meth:`start` runs.
+        """
         self._queue: queue.Queue = queue.Queue()
         self._thread: Optional[threading.Thread] = None
         self._root = None
@@ -38,8 +60,13 @@ class ConversationOverlay:
     def start(self) -> None:
         """Start the overlay window in a daemon thread.
 
-        No-op if OVERLAY_ENABLED=false. Logs a warning and returns
-        gracefully if no display is available (headless environment).
+        Probes for a usable tkinter display before spawning the thread so a
+        headless environment fails gracefully rather than crashing.
+
+        Side Effects:
+            Spawns a daemon thread and sets ``_running``. No-op if
+            ``OVERLAY_ENABLED`` is false; logs a warning and disables the
+            overlay if no display/tkinter backend is available.
         """
         if not self._enabled:
             logger.debug("Overlay disabled via OVERLAY_ENABLED=false")
@@ -63,23 +90,49 @@ class ConversationOverlay:
         self._running = True
 
     def update(self, user_text: str, pai_text: str) -> None:
-        """Queue new conversation text for display.
+        """Queue a new conversation pair for display.
 
-        Thread-safe: can be called from any thread.
+        Thread-safe; may be called from any thread. The overlay thread picks
+        the update up on its next poll.
+
+        Args:
+            user_text: The latest phrase heard from the user.
+            pai_text: PAI's latest response.
+
+        Side Effects:
+            Enqueues the pair. No-op if the overlay is disabled or not running.
         """
         if not self._enabled or not self._running:
             return
         self._queue.put((user_text, pai_text))
 
     def close(self) -> None:
-        """Signal the overlay to close."""
+        """Signal the overlay thread to tear down its window.
+
+        Enqueues a sentinel that causes the daemon thread to destroy the
+        root window and exit its mainloop.
+
+        Side Effects:
+            Clears ``_running``. No-op if the overlay is disabled or not
+            running.
+        """
         if not self._enabled or not self._running:
             return
         self._queue.put(None)  # Sentinel to signal shutdown
         self._running = False
 
     def _run(self) -> None:
-        """Daemon thread target: creates the tkinter window and runs mainloop."""
+        """Daemon-thread entry point: build the window and run the mainloop.
+
+        Imports tkinter lazily, constructs the borderless always-on-top
+        window positioned in the bottom-right corner, starts the queue poll
+        loop, then blocks in ``mainloop`` until the window is destroyed.
+
+        Side Effects:
+            Creates tkinter widgets and blocks the calling thread. Disables
+            the overlay and returns early if tkinter is missing or the window
+            cannot be created.
+        """
         try:
             import tkinter as tk
         except ImportError:
@@ -150,7 +203,17 @@ class ConversationOverlay:
         root.mainloop()
 
     def _poll_queue(self) -> None:
-        """Poll the queue every 100ms for updates from the main thread."""
+        """Drain pending updates and reschedule the next poll.
+
+        Runs on the tkinter thread. Applies every queued conversation pair to
+        the labels; on receiving the ``None`` sentinel it destroys the window
+        and stops rescheduling. Otherwise it re-arms itself via
+        ``root.after(100, ...)``.
+
+        Side Effects:
+            Mutates label text and schedules the next 100ms poll, or destroys
+            the root window on shutdown.
+        """
         try:
             while True:
                 msg = self._queue.get_nowait()

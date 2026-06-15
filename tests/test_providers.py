@@ -1,7 +1,7 @@
 """
 Property-based tests for the provider factory.
 
-Feature: pai-phase1-foundation
+Feature: Core Foundation
 """
 
 import pytest

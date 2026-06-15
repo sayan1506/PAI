@@ -20,12 +20,29 @@ class GeminiProvider(LLMProvider):
     """Google Gemini LLM provider.
 
     Configures the google-generativeai SDK with the API key from config
-    and uses GenerativeModel for text generation.
+    and uses ``GenerativeModel`` for single-shot text generation and native
+    function calling.
+
+    Attributes:
+        MODEL_NAME: The Gemini model identifier this provider targets.
+        model: The configured ``genai.GenerativeModel`` client.
     """
 
     MODEL_NAME = "gemini-2.5-flash-lite"
 
     def __init__(self):
+        """Configure the SDK and build the Gemini model client.
+
+        Reads ``config.GEMINI_API_KEY`` to authenticate the
+        google-generativeai SDK and instantiates a ``GenerativeModel`` for
+        the configured model.
+
+        Side effects:
+            Calls ``genai.configure`` with the API key and emits an info log.
+
+        Attributes set:
+            model: The configured ``genai.GenerativeModel`` instance.
+        """
         genai.configure(api_key=config.GEMINI_API_KEY)
         self.model = genai.GenerativeModel(self.MODEL_NAME)
         logger.info(f"GeminiProvider initialised with model: {self.MODEL_NAME}")
@@ -36,7 +53,7 @@ class GeminiProvider(LLMProvider):
         return self.MODEL_NAME
 
     def _build_contents(self, messages: list[Message]) -> list[dict]:
-        """Convert Message list to Gemini's contents format.
+        """Convert a Message list to Gemini's contents format.
 
         Handles four message types:
         - user/system messages         → role "user" with text part
@@ -45,6 +62,13 @@ class GeminiProvider(LLMProvider):
         - tool result messages         → role "user" with function_response parts
                                          (consecutive tool messages are batched into
                                          ONE user turn as Gemini requires)
+
+        Args:
+            messages: The conversation history as internal Message objects.
+
+        Returns:
+            A list of Gemini content dicts ready to pass to
+            ``generate_content``.
         """
         contents = []
         i = 0
@@ -96,7 +120,16 @@ class GeminiProvider(LLMProvider):
         return contents
 
     def _build_gemini_tools(self, tool_specs: list[dict]) -> list[GeminiTool]:
-        """Convert tool specs (JSON Schema format) to Gemini Tool objects."""
+        """Convert tool specs (JSON Schema format) to Gemini Tool objects.
+
+        Args:
+            tool_specs: PAI tool specs, each with ``name``, ``description``,
+                and ``parameters`` keys.
+
+        Returns:
+            A single-element list holding a ``GeminiTool`` that wraps all
+            function declarations.
+        """
         declarations = [
             FunctionDeclaration(
                 name=spec["name"],
@@ -108,7 +141,17 @@ class GeminiProvider(LLMProvider):
         return [GeminiTool(function_declarations=declarations)]
 
     def _parse_tool_calls(self, response) -> list[ToolCall]:
-        """Extract tool calls from a Gemini response."""
+        """Extract tool calls from a Gemini response.
+
+        Gemini does not issue distinct call IDs, so the function name is
+        reused as the ``ToolCall.id``.
+
+        Args:
+            response: The raw ``generate_content`` result.
+
+        Returns:
+            A list of ``ToolCall`` objects parsed from the response parts.
+        """
         tool_calls = []
         for part in response.candidates[0].content.parts:
             if hasattr(part, "function_call") and part.function_call.name:
@@ -126,6 +169,9 @@ class GeminiProvider(LLMProvider):
         Converts the internal Message format to Gemini's contents format,
         mapping "assistant" role to "model" and all other roles to "user".
 
+        Side effects:
+            Records the request with ``core.rate_tracker`` on success.
+
         Args:
             messages: The conversation history as a list of Message objects.
 
@@ -133,7 +179,8 @@ class GeminiProvider(LLMProvider):
             An LLMResponse containing the generated text and model metadata.
 
         Raises:
-            ProviderError: If the Gemini API call fails for any reason.
+            RateLimitError: If the API reports a rate limit or quota error.
+            ProviderError: If the Gemini API call fails for any other reason.
         """
         try:
             contents = self._build_contents(messages)
@@ -159,12 +206,20 @@ class GeminiProvider(LLMProvider):
     ) -> LLMResponse:
         """Generate a response using Gemini's native function calling.
 
+        Side effects:
+            Records the request with ``core.rate_tracker`` on success.
+
         Args:
             messages: Full conversation history including any tool results.
             tools: List of tool specs in JSON-Schema function format.
 
         Returns:
             LLMResponse with tool_calls populated if the LLM chose a tool.
+            ``content`` may be empty when only tool calls are returned.
+
+        Raises:
+            RateLimitError: If the API reports a rate limit or quota error.
+            ProviderError: If the Gemini tool call fails for any other reason.
         """
         try:
             contents = self._build_contents(messages)
@@ -197,7 +252,14 @@ class GeminiProvider(LLMProvider):
             raise ProviderError(f"Gemini tool call failed: {error_str}")
 
     def health_check(self) -> bool:
-        """Verify Gemini API key is valid by listing available models."""
+        """Verify the Gemini API key is valid by listing available models.
+
+        Returns:
+            True if at least one model is returned.
+
+        Raises:
+            ProviderError: If no models are returned or the request fails.
+        """
         try:
             models = list(genai.list_models())
             if not models:

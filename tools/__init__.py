@@ -16,7 +16,16 @@ from core.logger import logger
 
 
 def get_tools() -> list[BaseTool]:
-    """Return all currently enabled tool instances."""
+    """Return instances of all currently enabled tools.
+
+    Reads the feature flags in ``config`` and constructs one instance per
+    enabled tool. Optional tools are imported lazily so that disabling a
+    feature also avoids importing its (sometimes heavy) dependencies.
+
+    Returns:
+        A list of ready-to-use ``BaseTool`` instances reflecting the current
+        configuration.
+    """
     tools = []
     if config.ENABLE_FILE_OPS:
         tools.append(FileSystemTool())
@@ -43,18 +52,20 @@ def get_tools() -> list[BaseTool]:
 
 
 def dispatch(name: str, arguments: dict) -> ToolResult:
-    """
-    Find and execute a tool by name.
+    """Execute a registered tool by name.
+
+    Looks up the enabled tool whose ``name`` matches and invokes its
+    ``execute`` method with the provided arguments, logging the outcome.
 
     Args:
-        name: Tool name as returned by BaseTool.name.
-        arguments: Dict of arguments to pass to tool.execute().
+        name: Tool name as returned by ``BaseTool.name``.
+        arguments: Keyword arguments forwarded to ``tool.execute``.
 
     Returns:
-        ToolResult from the tool.
+        The ``ToolResult`` produced by the tool.
 
     Raises:
-        ToolError: If no tool with the given name is registered or enabled.
+        ToolError: If no enabled tool matches ``name``.
     """
     for tool in get_tools():
         if tool.name == name:

@@ -18,8 +18,11 @@ from core.logger import logger
 
 
 class CDPClient:
-    """
-    Connects to Chrome's remote debugging port and sends CDP commands.
+    """Low-level client for Chrome's remote debugging (DevTools) protocol.
+
+    Connects to a running Chrome instance over its HTTP JSON endpoint to
+    discover tabs, then opens a WebSocket to a page tab to send CDP commands
+    and read results. Used by ``BrowserTool`` and ``ChromeLauncher``.
 
     Usage:
         client = CDPClient()
@@ -27,9 +30,20 @@ class CDPClient:
         text = client.get_page_text()
         client.navigate("https://example.com")
         client.disconnect()
+
+    Attributes:
+        _port: Remote debugging port to connect to.
+        _ws: Active WebSocket connection, or None when disconnected.
+        _msg_id: Monotonically increasing CDP message id counter.
     """
 
     def __init__(self, port: int = None):
+        """Initialize the client without connecting.
+
+        Args:
+            port: Remote debugging port. Falls back to
+                ``config.BROWSER_REMOTE_PORT`` when not provided.
+        """
         self._port = port or config.BROWSER_REMOTE_PORT
         self._ws = None
         self._msg_id = 0
@@ -37,7 +51,12 @@ class CDPClient:
     # ── Connection ────────────────────────────────────────────────────────
 
     def is_reachable(self) -> bool:
-        """Return True if Chrome's debugging port is accepting connections."""
+        """Check whether Chrome's debugging port is accepting connections.
+
+        Returns:
+            True if a GET to the ``/json`` endpoint returns HTTP 200, False on
+            any error or non-200 response.
+        """
         try:
             resp = requests.get(
                 f"http://localhost:{self._port}/json", timeout=2
@@ -47,16 +66,19 @@ class CDPClient:
             return False
 
     def connect(self) -> None:
-        """
-        Attach to the first available (non-devtools) Chrome tab via WebSocket.
+        """Attach to the first available page tab via WebSocket.
 
-        Steps:
-          1. GET http://localhost:{port}/json → list of tab descriptors
-          2. Pick the first tab whose type == "page"
-          3. Open a websocket to tab["webSocketDebuggerUrl"]
+        Queries the ``/json`` endpoint for tab descriptors, picks the first
+        tab whose type is ``"page"``, and opens a WebSocket to its
+        ``webSocketDebuggerUrl``.
 
         Raises:
-            ConnectionError if no tabs are found or websocket fails.
+            ConnectionError: If tabs cannot be queried, no page tab exists,
+                the tab exposes no WebSocket URL, or the WebSocket fails to
+                open.
+
+        Side Effects:
+            Opens a WebSocket connection stored on ``self._ws``.
         """
         try:
             resp = requests.get(
@@ -97,7 +119,14 @@ class CDPClient:
             )
 
     def disconnect(self) -> None:
-        """Close the WebSocket connection if open. Set self._ws = None."""
+        """Close the WebSocket connection if open.
+
+        Safe to call when already disconnected. Always leaves ``self._ws`` set
+        to None.
+
+        Side Effects:
+            Closes the active WebSocket connection.
+        """
         if self._ws is not None:
             try:
                 self._ws.close()
@@ -109,19 +138,18 @@ class CDPClient:
     # ── Commands ──────────────────────────────────────────────────────────
 
     def send(self, method: str, params: dict = None) -> dict:
-        """
-        Send a CDP command and wait for its response.
+        """Send a CDP command and wait for its matching response.
 
         Args:
-            method: CDP method string e.g. "Runtime.evaluate"
-            params: CDP params dict
+            method: CDP method string, e.g. ``"Runtime.evaluate"``.
+            params: Optional CDP parameters dict.
 
         Returns:
-            The "result" field from the CDP response dict.
+            The ``result`` field of the CDP response.
 
         Raises:
-            RuntimeError if CDP returns an error field.
-            RuntimeError if WebSocket is not connected.
+            RuntimeError: If the WebSocket is not connected, or if the CDP
+                response contains an ``error`` field.
         """
         if self._ws is None:
             raise RuntimeError("WebSocket is not connected. Call connect() first.")
@@ -145,17 +173,23 @@ class CDPClient:
         return response.get("result", {})
 
     def navigate(self, url: str) -> None:
-        """Navigate the current tab to url using Page.navigate."""
+        """Navigate the current tab to a URL.
+
+        Args:
+            url: Destination URL, sent via the ``Page.navigate`` command.
+        """
         self.send("Page.navigate", {"url": url})
 
     def get_page_text(self) -> str:
-        """
-        Return the visible text content of the current page.
+        """Return the visible text content of the current page.
 
-        Uses Runtime.evaluate to call document.body.innerText.
-        Strips leading/trailing whitespace and collapses runs of
-        blank lines to at most two newlines.
-        Returns empty string if the page has no body or result is None.
+        Evaluates ``document.body.innerText`` via ``Runtime.evaluate``, strips
+        surrounding whitespace, and collapses runs of blank lines to at most
+        two newlines.
+
+        Returns:
+            The page's visible text, or an empty string if the page has no
+            body or the result is None.
         """
         result = self.send(
             "Runtime.evaluate",
@@ -172,7 +206,12 @@ class CDPClient:
         return text
 
     def get_page_url(self) -> str:
-        """Return the current tab's URL via Runtime.evaluate on window.location.href."""
+        """Return the current tab's URL.
+
+        Returns:
+            The value of ``window.location.href``, or an empty string if
+            unavailable.
+        """
         result = self.send(
             "Runtime.evaluate",
             {"expression": "window.location.href"}
@@ -180,7 +219,12 @@ class CDPClient:
         return result.get("result", {}).get("value", "")
 
     def get_page_title(self) -> str:
-        """Return document.title of the current tab via Runtime.evaluate."""
+        """Return the current tab's document title.
+
+        Returns:
+            The value of ``document.title``, or an empty string if
+            unavailable.
+        """
         result = self.send(
             "Runtime.evaluate",
             {"expression": "document.title"}
@@ -190,15 +234,29 @@ class CDPClient:
     # ── Helpers ───────────────────────────────────────────────────────────
 
     def _next_id(self) -> int:
-        """Increment and return the next message ID."""
+        """Increment and return the next CDP message id.
+
+        Returns:
+            The new monotonically increasing message id.
+        """
         self._msg_id += 1
         return self._msg_id
 
     def _recv_until(self, target_id: int, timeout: float = 10.0) -> dict:
-        """
-        Read WebSocket messages until we receive one whose "id" matches
-        target_id. Discard unmatched events/messages. Raise TimeoutError if
-        timeout is exceeded.
+        """Read WebSocket messages until the response for ``target_id`` arrives.
+
+        Unmatched messages (asynchronous events or responses to other
+        commands) are discarded.
+
+        Args:
+            target_id: The CDP message id whose response is awaited.
+            timeout: Maximum seconds to wait before giving up.
+
+        Returns:
+            The decoded message whose ``id`` matches ``target_id``.
+
+        Raises:
+            TimeoutError: If no matching response arrives within ``timeout``.
         """
         start = time.time()
         while True:

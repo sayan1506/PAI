@@ -14,7 +14,7 @@ Two scopes:
                 this confirmation list asks first.
 
 Voice mode: request_confirmation() auto-denies and logs a clear message.
-Voice confirmation (speak "yes"/"no") is planned for a future phase.
+Voice confirmation (speak "yes"/"no") is a planned future feature.
 
 Config key: CONFIRM_DESTRUCTIVE (default True). Set False to bypass all gates.
 """

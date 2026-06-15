@@ -37,17 +37,38 @@ _DEFAULT_SEARCH_ENGINE = "google"
 
 
 class BrowserTool(BaseTool):
+    """Tool that gives the LLM visible control over a real Chrome browser.
+
+    Routes a single ``action`` argument to handlers for navigating, web
+    searching, clicking, scrolling, reading page text, and closing the
+    browser. Input actions (typing, clicking, scrolling) use PyAutoGUI so
+    they are visible on screen, while page reading goes through the Chrome
+    DevTools Protocol for speed and accuracy. Chrome is launched or attached
+    lazily on first use via ``ChromeLauncher``.
+
+    Attributes:
+        _launcher: ``ChromeLauncher`` owning the browser process and CDP
+            client.
+        _loaded: Whether Chrome has been launched/attached this session.
+    """
 
     def __init__(self):
+        """Initialize the tool without launching the browser.
+
+        Creates the ``ChromeLauncher`` and marks the browser as not yet
+        loaded; the actual launch/attach is deferred until first use.
+        """
         self._launcher = ChromeLauncher()
         self._loaded = False
 
     @property
     def name(self) -> str:
+        """Return the tool's unique identifier."""
         return "browser"
 
     @property
     def description(self) -> str:
+        """Return the LLM-facing description of this tool."""
         return (
             "Controls the user's real Chrome browser. "
             "Use this tool to open websites, search the web, click links, "
@@ -65,6 +86,7 @@ class BrowserTool(BaseTool):
 
     @property
     def parameters(self) -> dict:
+        """Return the JSON Schema for this tool's arguments."""
         return {
             "type": "object",
             "properties": {
@@ -98,7 +120,20 @@ class BrowserTool(BaseTool):
         }
 
     def execute(self, **kwargs) -> ToolResult:
-        """Route to the correct action handler. Never raises — wraps all exceptions."""
+        """Route a browser action to its handler.
+
+        Ensures Chrome is running, then dispatches on the ``action`` argument.
+        All exceptions are caught and returned as failed results rather than
+        raised.
+
+        Args:
+            **kwargs: Expects ``action`` plus action-specific arguments such
+                as ``url``, ``query``, ``target``, and ``amount``.
+
+        Returns:
+            The ``ToolResult`` from the selected handler, or an error result
+            for an unknown action or any raised exception.
+        """
         action = kwargs.get("action", "")
         try:
             self._ensure_loaded()
@@ -124,20 +159,36 @@ class BrowserTool(BaseTool):
             return ToolResult(success=False, error=str(e))
 
     def _ensure_loaded(self) -> None:
-        """Launch or attach Chrome on first use."""
+        """Launch or attach to Chrome on first use.
+
+        No-op after the first successful call. Delegates to
+        ``ChromeLauncher.ensure_running`` and records that the browser is
+        loaded.
+
+        Side Effects:
+            May launch a Chrome process and open a CDP connection.
+        """
         if not self._loaded:
             self._launcher.ensure_running()
             self._loaded = True
 
     def _open_url(self, url: str) -> ToolResult:
-        """
-        Navigate to url visibly by typing it into the address bar.
+        """Navigate to a URL by typing it into the address bar.
 
-        Steps:
-          1. Normalise URL — prepend "https://" if no scheme present
-          2. Focus address bar with Ctrl+L
-          3. Select all, type URL, press Enter
-          4. Wait for page to start loading
+        Normalises the URL (prepending ``https://`` when no scheme is
+        present), focuses the address bar with Ctrl+L, selects existing
+        text, types the URL visibly, presses Enter, and waits briefly for the
+        page to begin loading.
+
+        Args:
+            url: The destination URL or bare host.
+
+        Returns:
+            A ``ToolResult`` confirming navigation, or an error if no URL was
+            provided.
+
+        Side Effects:
+            Drives the keyboard via PyAutoGUI to control the visible browser.
         """
         if not url:
             return ToolResult(success=False, error="No URL provided for open_url action")
@@ -165,10 +216,17 @@ class BrowserTool(BaseTool):
         return ToolResult(success=True, output=f"Navigated to {url}")
 
     def _search(self, query: str) -> ToolResult:
-        """
-        Search the web for query using the default search engine.
+        """Search the web for a query using the default search engine.
 
-        Builds the full search URL and navigates to it via _open_url.
+        Builds the full search URL from the configured default engine and
+        navigates to it via ``_open_url``.
+
+        Args:
+            query: The search terms.
+
+        Returns:
+            A ``ToolResult`` from the navigation, or an error if the query is
+            empty.
         """
         if not query:
             return ToolResult(success=False, error="No query provided for search action")
@@ -177,11 +235,22 @@ class BrowserTool(BaseTool):
         return self._open_url(search_url)
 
     def _click(self, target: str) -> ToolResult:
-        """
-        Click an element whose visible text matches target.
+        """Click an element whose visible text matches ``target``.
 
-        Uses CDP to find the element's bounding rect, then PyAutoGUI
-        to perform the visible click at the element's centre.
+        Runs JavaScript via CDP to locate the first clickable element whose
+        inner text contains ``target`` (case-insensitive), reads its bounding
+        rect, scales the centre by ``config.SCREEN_SCALE_FACTOR``, then issues
+        a visible PyAutoGUI click there.
+
+        Args:
+            target: The visible text of the link or button to click.
+
+        Returns:
+            A ``ToolResult`` confirming the click, or an error if ``target``
+            is empty or no matching element was found.
+
+        Side Effects:
+            Evaluates JavaScript in the page and moves/clicks the mouse.
         """
         if not target:
             return ToolResult(success=False, error="No target provided for click action")
@@ -226,10 +295,21 @@ class BrowserTool(BaseTool):
         return ToolResult(success=True, output=f"Clicked element: {target}")
 
     def _scroll(self, direction: str, amount: int) -> ToolResult:
-        """
-        Scroll the page up or down.
+        """Scroll the page up or down.
 
-        Moves the mouse to screen centre and scrolls by the given amount.
+        Moves the mouse to the screen centre, then scrolls by ``amount``
+        clicks in the given direction (any direction other than ``"up"`` is
+        treated as down).
+
+        Args:
+            direction: ``"up"`` to scroll up, otherwise scrolls down.
+            amount: Number of scroll clicks.
+
+        Returns:
+            A ``ToolResult`` describing the scroll.
+
+        Side Effects:
+            Moves the mouse and scrolls the active window via PyAutoGUI.
         """
         width, height = pyautogui.size()
         pyautogui.moveTo(width // 2, height // 2)
@@ -242,10 +322,14 @@ class BrowserTool(BaseTool):
         return ToolResult(success=True, output=f"Scrolled {direction} by {amount} clicks")
 
     def _read_page(self) -> ToolResult:
-        """
-        Return the visible text of the current page via CDP.
+        """Return the visible text of the current page via CDP.
 
-        Truncates to 8000 characters if the page is very long.
+        Truncates output to 8000 characters, appending a marker when the page
+        has more content.
+
+        Returns:
+            A ``ToolResult`` whose ``output`` is the (possibly truncated) page
+            text.
         """
         text = self._launcher.cdp.get_page_text()
 
@@ -255,8 +339,13 @@ class BrowserTool(BaseTool):
         return ToolResult(success=True, output=text)
 
     def _close(self) -> ToolResult:
-        """
-        Close the browser and reset state.
+        """Close the browser and reset loaded state.
+
+        Returns:
+            A ``ToolResult`` confirming the browser was closed.
+
+        Side Effects:
+            Terminates or detaches the browser via ``ChromeLauncher.close``.
         """
         self._launcher.close()
         self._loaded = False

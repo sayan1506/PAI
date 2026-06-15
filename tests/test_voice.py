@@ -1,7 +1,7 @@
 """
 tests/test_voice.py
 
-Unit tests for the Phase 2 voice input pipeline.
+Unit tests for the voice input pipeline.
 All hardware (mic, models) is mocked — no real audio device needed.
 """
 

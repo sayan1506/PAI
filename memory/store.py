@@ -1,10 +1,16 @@
-"""
-memory/store.py
+"""SQLite-backed persistent store for PAI long-term memory.
 
-SQLite-backed persistent store for PAI long-term memory.
-Tables: facts, shortcuts.
-All public functions open + close their own connection (no global state).
-Thread-safe via a module-level write lock + WAL mode.
+Provides low-level CRUD over four tables: ``facts``, ``shortcuts``,
+``reminders``, and ``rate_limits``. There is no global connection — every
+public function opens and closes its own connection, keeping the module
+free of shared connection state.
+
+Threading and I/O:
+    A module-level :class:`threading.Lock` serialises all writes, and each
+    connection enables SQLite WAL journaling and foreign-key enforcement.
+    Connections are opened with ``check_same_thread=False`` so they may be
+    used from the daemon threads that drive reminders and rate tracking.
+    Timestamps are stored as UTC ISO 8601 strings.
 """
 
 import sqlite3
@@ -18,10 +24,24 @@ _lock = threading.Lock()
 
 
 def _now() -> str:
+    """Return the current UTC time as an ISO 8601 string."""
     return datetime.now(timezone.utc).isoformat()
 
 
 def _connect() -> sqlite3.Connection:
+    """Open a configured SQLite connection to the memory database.
+
+    Expands the configured DB path, creates the parent directory if needed,
+    and enables WAL journaling and foreign-key enforcement. The returned
+    connection uses :class:`sqlite3.Row` as its row factory.
+
+    Returns:
+        An open :class:`sqlite3.Connection`. The caller owns it and must
+        close it.
+
+    Raises:
+        sqlite3.Error: If the database cannot be opened.
+    """
     db_path = Path(config.MEMORY_DB_PATH).expanduser()
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path), check_same_thread=False)
@@ -32,7 +52,15 @@ def _connect() -> sqlite3.Connection:
 
 
 def init_db() -> None:
-    """Create tables if they don't exist. Called once at agent startup."""
+    """Create all memory tables and indexes if they do not yet exist.
+
+    Idempotent; safe to call on every startup. Acquires the write lock and
+    creates the ``facts``, ``shortcuts``, ``reminders``, and ``rate_limits``
+    tables along with their supporting indexes.
+
+    Side Effects:
+        Writes schema to the SQLite database file.
+    """
     with _lock:
         conn = _connect()
         conn.executescript("""
@@ -80,7 +108,20 @@ def init_db() -> None:
 # ── Facts ─────────────────────────────────────────────────────────────────────
 
 def upsert_fact(key: str, value: str, source: str = "user") -> None:
-    """Insert or update a fact. Key is normalised to snake_case."""
+    """Insert a fact or update the existing one with the same key.
+
+    The key is normalised to lowercase snake_case (spaces become
+    underscores) so lookups are stable. On conflict the value, source, and
+    ``updated_at`` timestamp are overwritten; ``created_at`` is preserved.
+
+    Args:
+        key: The fact identifier; normalised before storage.
+        value: The fact's value; surrounding whitespace is stripped.
+        source: Where the fact came from. Defaults to ``"user"``.
+
+    Side Effects:
+        Commits a write to the ``facts`` table under the write lock.
+    """
     key = key.strip().lower().replace(" ", "_")
     now = _now()
     with _lock:
@@ -101,7 +142,17 @@ def upsert_fact(key: str, value: str, source: str = "user") -> None:
 
 
 def delete_fact(key: str) -> bool:
-    """Delete a fact by key. Returns True if a row was removed."""
+    """Delete a fact by key.
+
+    Args:
+        key: The fact identifier; normalised to snake_case before matching.
+
+    Returns:
+        True if a row was removed, False if no matching key existed.
+
+    Side Effects:
+        Commits a delete to the ``facts`` table under the write lock.
+    """
     key = key.strip().lower().replace(" ", "_")
     with _lock:
         conn = _connect()
@@ -113,7 +164,14 @@ def delete_fact(key: str) -> bool:
 
 
 def get_fact(key: str) -> str | None:
-    """Retrieve a single fact value by exact normalised key."""
+    """Retrieve a single fact value by its exact normalised key.
+
+    Args:
+        key: The fact identifier; normalised to snake_case before matching.
+
+    Returns:
+        The stored value string, or None if the key is not present.
+    """
     key = key.strip().lower().replace(" ", "_")
     with _lock:
         conn = _connect()
@@ -125,7 +183,11 @@ def get_fact(key: str) -> str | None:
 
 
 def all_facts() -> list[dict]:
-    """Return all facts ordered by most recently updated."""
+    """Return every stored fact, most recently updated first.
+
+    Returns:
+        A list of dicts, each with ``key``, ``value``, and ``source`` keys.
+    """
     with _lock:
         conn = _connect()
         rows = conn.execute(
@@ -136,9 +198,18 @@ def all_facts() -> list[dict]:
 
 
 def search_facts(keywords: list[str], top_k: int = 5) -> list[dict]:
-    """
-    Return facts whose key or value contains any of the given keywords.
-    Case-insensitive substring match. Returns at most top_k rows.
+    """Return facts whose key or value matches any of the given keywords.
+
+    Performs a case-insensitive substring (``LIKE``) match against both the
+    key and value columns, ordered by most recently updated.
+
+    Args:
+        keywords: Keyword strings to match. An empty list yields no results.
+        top_k: Maximum number of rows to return. Defaults to 5.
+
+    Returns:
+        A list of dicts (at most ``top_k``), each with ``key`` and ``value``
+        keys. Empty if ``keywords`` is empty or nothing matched.
     """
     if not keywords:
         return []
@@ -161,7 +232,18 @@ def search_facts(keywords: list[str], top_k: int = 5) -> list[dict]:
 # ── Shortcuts ─────────────────────────────────────────────────────────────────
 
 def upsert_shortcut(name: str, description: str) -> None:
-    """Insert or replace a named shortcut (case-insensitive on name)."""
+    """Insert a shortcut or update the existing one with the same name.
+
+    Names are matched case-insensitively (``COLLATE NOCASE``). On conflict
+    only the description is updated.
+
+    Args:
+        name: The shortcut's trigger name; whitespace is stripped.
+        description: What the shortcut does; whitespace is stripped.
+
+    Side Effects:
+        Commits a write to the ``shortcuts`` table under the write lock.
+    """
     now = _now()
     with _lock:
         conn = _connect()
@@ -179,7 +261,17 @@ def upsert_shortcut(name: str, description: str) -> None:
 
 
 def delete_shortcut(name: str) -> bool:
-    """Delete a shortcut by name. Returns True if removed."""
+    """Delete a shortcut by name.
+
+    Args:
+        name: The shortcut name to delete (matched case-insensitively).
+
+    Returns:
+        True if a row was removed, False if no matching name existed.
+
+    Side Effects:
+        Commits a delete to the ``shortcuts`` table under the write lock.
+    """
     with _lock:
         conn = _connect()
         cursor = conn.execute(
@@ -193,7 +285,14 @@ def delete_shortcut(name: str) -> bool:
 
 
 def get_shortcut(name: str) -> str | None:
-    """Return the description of a named shortcut, or None."""
+    """Return the description of a named shortcut.
+
+    Args:
+        name: The shortcut name to look up (matched case-insensitively).
+
+    Returns:
+        The description string, or None if no matching shortcut exists.
+    """
     with _lock:
         conn = _connect()
         row = conn.execute(
@@ -205,7 +304,11 @@ def get_shortcut(name: str) -> str | None:
 
 
 def all_shortcuts() -> list[dict]:
-    """Return all shortcuts ordered alphabetically by name."""
+    """Return every stored shortcut, ordered alphabetically by name.
+
+    Returns:
+        A list of dicts, each with ``name`` and ``description`` keys.
+    """
     with _lock:
         conn = _connect()
         rows = conn.execute(
@@ -321,9 +424,14 @@ def delete_reminder(reminder_id: int) -> bool:
 # ── Rate Limits ───────────────────────────────────────────────────────────────
 
 def get_daily_rate_count(provider: str) -> int:
-    """
-    Return today's request count for the given provider.
-    Returns 0 if no row exists for today.
+    """Return today's request count for the given provider.
+
+    Args:
+        provider: The provider identifier whose count to read.
+
+    Returns:
+        Today's count for the provider, or 0 if no row exists for today
+        (UTC-derived calendar date).
     """
     today = date.today().isoformat()
     with _lock:
@@ -337,9 +445,19 @@ def get_daily_rate_count(provider: str) -> int:
 
 
 def increment_daily_rate_count(provider: str) -> int:
-    """
-    Increment today's request count for the given provider by 1.
-    Creates the row if it doesn't exist. Returns the new total count.
+    """Increment today's request count for the given provider by one.
+
+    Inserts a row for ``(provider, today)`` if none exists, otherwise bumps
+    the existing count.
+
+    Args:
+        provider: The provider identifier whose count to increment.
+
+    Returns:
+        The provider's new total count for today.
+
+    Side Effects:
+        Commits a write to the ``rate_limits`` table under the write lock.
     """
     today = date.today().isoformat()
     now   = _now()

@@ -1,9 +1,14 @@
-"""
-memory/retriever.py
+"""Keyword-based memory retriever for system-prompt injection.
 
-Keyword-based context retriever. Extracts meaningful words from the
-user's message, searches the facts table, and formats a context block
-to inject into the system prompt before each LLM call.
+Extracts meaningful keywords from the user's message, searches the stored
+facts via :mod:`memory.store`, and formats a compact context block that the
+agent appends to the system prompt before each LLM call. User-defined
+shortcuts are always included since they are typically few.
+
+Notable behavior:
+    - Retrieval is gated by ``config.MEMORY_ENABLED``.
+    - A frozen stopword set filters out common, low-signal tokens.
+    - All output is wrapped in ``[MEMORY] ... [/MEMORY]`` delimiters.
 """
 
 import re
@@ -27,18 +32,34 @@ _STOPWORDS = frozenset({
 
 
 def _extract_keywords(text: str) -> list[str]:
-    """
-    Tokenise text, lowercase, drop stopwords and single-char tokens.
-    Returns deduplicated list.
+    """Extract distinct, meaningful keywords from free-form text.
+
+    Tokenises on alphanumeric runs, lowercases, then drops stopwords and
+    tokens of two characters or fewer.
+
+    Args:
+        text: The raw input string to tokenise.
+
+    Returns:
+        A deduplicated list of keyword tokens (order not guaranteed).
     """
     tokens = re.findall(r"[a-zA-Z0-9]+", text.lower())
     return list({t for t in tokens if t not in _STOPWORDS and len(t) > 2})
 
 
 def build_memory_context(user_input: str) -> str:
-    """
-    Return a formatted memory context block to append to the system prompt.
-    Empty string if memory is disabled or nothing relevant is found.
+    """Build a memory context block to append to the system prompt.
+
+    Extracts keywords from the user's message, retrieves the most relevant
+    stored facts, and appends all user-defined shortcuts. The pieces are
+    formatted into a single delimited block for prompt injection.
+
+    Args:
+        user_input: The raw user message for the current turn.
+
+    Returns:
+        A formatted context string wrapped in ``[MEMORY]`` delimiters, or an
+        empty string if memory is disabled or nothing relevant was found.
     """
     if not config.MEMORY_ENABLED:
         return ""

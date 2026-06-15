@@ -1,9 +1,11 @@
-"""
-voice/listener.py
+"""Utterance collector driven by Silero VAD.
 
-Utterance collector using Silero VAD.
-Records from the mic until the user stops speaking, then returns
-the full audio buffer as a numpy array ready for STT.
+Provides :class:`UtteranceListener`, which records from the microphone
+until the user stops speaking, then returns the full utterance as a
+numpy array ready for speech-to-text. Speech start and end are detected
+with the shared :class:`VoiceActivityDetector`; a trailing-silence
+threshold and a minimum-speech-length requirement guard against
+premature cutoffs and spurious triggers.
 """
 
 import numpy as np
@@ -13,14 +15,27 @@ import config
 
 
 class UtteranceListener:
-    """
-    Collects a complete speech utterance from the microphone.
+    """Collects a complete speech utterance from the microphone.
 
-    Uses Silero VAD to detect when speech starts and ends.
-    Returns the full audio buffer once silence is detected.
+    Uses Silero VAD to detect when speech starts and ends, returning the
+    buffered audio once enough trailing silence is observed. The silence
+    threshold is derived from ``VAD_SILENCE_MS`` and the per-chunk
+    duration implied by the mic sample rate.
+
+    Attributes:
+        vad: The voice activity detector used to classify each chunk.
     """
 
     def __init__(self, vad: VoiceActivityDetector):
+        """Initialise the listener and derive the silence threshold.
+
+        Computes how many consecutive silent chunks mark the end of
+        speech, based on ``VAD_SILENCE_MS`` and the chunk duration
+        implied by ``MIC_SAMPLE_RATE`` (512 samples per chunk).
+
+        Args:
+            vad: A loaded :class:`VoiceActivityDetector` instance.
+        """
         self.vad = vad
         # How many consecutive silent chunks = end of speech
         # Derived from actual config values (512 samples per chunk)
@@ -28,14 +43,23 @@ class UtteranceListener:
         self._silence_chunks = config.VAD_SILENCE_MS // _ms_per_chunk
 
     def listen(self, mic) -> np.ndarray:
-        """
-        Record until the user stops speaking.
+        """Record until the user stops speaking.
+
+        Reads chunks from the microphone, discarding leading silence
+        until speech begins. Once speech has started, chunks are buffered
+        (including short internal pauses) until enough consecutive silent
+        chunks are seen and a minimum amount of speech has accumulated,
+        at which point the buffered utterance is returned.
 
         Args:
-            mic: MicCapture instance (must be started).
+            mic: A started MicCapture instance to read audio from.
 
         Returns:
             numpy float32 array of the complete utterance at 16kHz.
+
+        Side effects:
+            Consumes audio from the microphone and resets VAD state once
+            the utterance ends.
         """
         logger.info("Listening for speech...")
         audio_buffer = []

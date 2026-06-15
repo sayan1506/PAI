@@ -1,9 +1,11 @@
-"""
-voice/tts.py
+"""Text-to-speech engines for spoken responses.
 
-Text-to-Speech module.
-Provides BaseTTS abstract base class and concrete implementations
-for Kokoro neural TTS and pyttsx3 fallback.
+Defines the :class:`BaseTTS` abstract interface and two concrete
+implementations: :class:`KokoroTTS`, a neural engine that streams audio
+in chunks at 24 kHz with epoch-based barge-in support, and
+:class:`Pyttsx3TTS`, a synchronous OS-engine fallback without
+interruption support. The :func:`get_tts` factory selects and loads an
+engine from configuration, falling back gracefully on failure.
 """
 
 from abc import ABC, abstractmethod
@@ -46,18 +48,25 @@ class BaseTTS(ABC):
 
 
 class KokoroTTS(BaseTTS):
-    """
-    Neural TTS engine using Kokoro KPipeline.
+    """Neural TTS engine using Kokoro KPipeline.
 
     Streams audio in chunks at 24kHz. Uses an epoch counter for
     instant barge-in interruption: stop() increments the epoch and
     calls sd.stop(), causing the speak() loop to exit on the next
     chunk boundary.
+
+    Attributes:
+        SAMPLE_RATE: Output sample rate in Hz for synthesised audio.
     """
 
     SAMPLE_RATE: int = 24_000
 
     def __init__(self) -> None:
+        """Initialise an unloaded Kokoro engine.
+
+        Sets up the epoch counter and speaking flag used for barge-in;
+        the pipeline is built lazily in :meth:`load`.
+        """
         self._pipeline = None
         self._epoch: int = 0
         self._speaking: bool = False
@@ -139,6 +148,7 @@ class Pyttsx3TTS(BaseTTS):
     """
 
     def __init__(self) -> None:
+        """Initialise an unloaded pyttsx3 engine."""
         self._engine = None
         self._speaking: bool = False
 

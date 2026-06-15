@@ -1,7 +1,8 @@
-"""
-utils/vision_utils.py
+"""Screen capture helpers for the vision pipeline.
 
-Screenshot capture using mss (cross-platform, no dependencies on X11/Win32 API).
+Uses the ``mss`` library for fast, cross-platform screenshot capture without
+depending on the X11 or Win32 APIs directly. Output is PNG bytes ready to
+hand to a vision-capable LLM provider.
 """
 
 import time
@@ -10,14 +11,21 @@ from core.logger import logger
 
 
 def capture_screenshot(monitor: int = 1) -> bytes:
-    """
-    Capture the primary monitor and return raw PNG bytes.
+    """Capture a monitor and return the image as raw PNG bytes.
+
+    Sleeps for ``config.SCREENSHOT_DELAY`` seconds before grabbing, giving
+    any triggering UI time to dismiss, then encodes the grab to PNG and logs
+    its dimensions and size.
 
     Args:
-        monitor: 1 = primary monitor, 0 = all monitors combined
+        monitor: Which monitor to capture. ``1`` is the primary monitor (the
+            default); ``0`` captures all monitors combined.
 
     Returns:
-        PNG bytes ready to pass to a vision provider.
+        PNG-encoded image bytes suitable for passing to a vision provider.
+
+    Side Effects:
+        Blocks for the configured screenshot delay and logs an info line.
     """
     import mss
     import mss.tools

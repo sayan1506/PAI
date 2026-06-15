@@ -16,7 +16,17 @@ import config
 
 
 def main():
-    """Main entry point for the PAI assistant."""
+    """Parse arguments, validate the environment, and start the assistant.
+
+    Parses CLI flags, prints a startup banner, validates configuration,
+    loads the LLM provider, runs the component health check and a provider
+    network ping, then dispatches to voice or text mode. Voice mode is
+    downgraded to text automatically when voice hardware is unavailable.
+
+    Side effects:
+        Writes to stdout, may call ``sys.exit(1)`` on a configuration,
+        startup, provider, or critical-component failure.
+    """
     parser = argparse.ArgumentParser(description="PAI — Personal AI Assistant")
     parser.add_argument(
         "--voice", action="store_true",
@@ -78,7 +88,20 @@ def main():
 
 
 def _run_text_mode(agent):
-    """Text-based chat loop with conversation overlay."""
+    """Run the interactive text chat loop until the user exits.
+
+    Starts the conversation overlay, optional reminder scheduler, and global
+    hotkey listener, then reads lines from stdin and forwards them to the
+    agent. Recognizes the ``reset``, ``exit``, and ``quit`` commands. All
+    background components are torn down cleanly on exit.
+
+    Args:
+        agent: The :class:`Agent` that processes each user message.
+
+    Side effects:
+        Reads stdin, writes stdout, updates the overlay, and starts/stops
+        background threads (scheduler, hotkey listener).
+    """
     from core.reminder_scheduler import ReminderScheduler
     from core.hotkey import HotkeyListener
     from core.timing import TurnTimer
@@ -134,7 +157,22 @@ def _run_text_mode(agent):
 
 
 def _run_voice_mode(agent):
-    """Voice input loop using wake word + STT, with TTS, overlay, and notifications."""
+    """Run the wake-word voice loop with STT, TTS, overlay, and notifications.
+
+    Loads the TTS engine, starts the overlay, optional reminder scheduler, and
+    hotkey listener, then initializes the voice pipeline. Each transcription is
+    sent to the agent; the response is printed, shown in the overlay, surfaced
+    as a desktop notification, and spoken when TTS is available. Background
+    components are torn down cleanly on exit.
+
+    Args:
+        agent: The :class:`Agent` that processes each transcribed utterance.
+
+    Side effects:
+        Captures microphone audio, writes stdout, drives TTS playback, posts
+        notifications, and starts/stops background threads. Calls
+        ``sys.exit(1)`` if the audio pipeline fails to start.
+    """
     from voice.pipeline import VoicePipeline
     from core.exceptions import AudioError
     from core.reminder_scheduler import ReminderScheduler

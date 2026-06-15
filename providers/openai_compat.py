@@ -37,7 +37,14 @@ class _OpenAICompatBase(LLMProvider):
     """
 
     def _make_client(self):
-        """Return a configured openai.OpenAI client. Must be overridden."""
+        """Return a configured openai.OpenAI client. Must be overridden.
+
+        Returns:
+            An ``openai.OpenAI`` client instance.
+
+        Raises:
+            NotImplementedError: Always, unless a subclass overrides this.
+        """
         raise NotImplementedError
 
     def _build_messages(self, messages: list[Message]) -> list[dict]:
@@ -52,6 +59,12 @@ class _OpenAICompatBase(LLMProvider):
           role="tool"                      → {"role": "tool",
                                               "content": text,
                                               "tool_call_id": tool_call_id}
+
+        Args:
+            messages: The conversation history as internal Message objects.
+
+        Returns:
+            A list of OpenAI chat message dicts.
         """
         result = []
         for msg in messages:
@@ -86,7 +99,15 @@ class _OpenAICompatBase(LLMProvider):
         return result
 
     def _build_tools(self, tool_specs: list[dict]) -> list[dict]:
-        """Wrap PAI tool specs in the OpenAI function-calling envelope."""
+        """Wrap PAI tool specs in the OpenAI function-calling envelope.
+
+        Args:
+            tool_specs: PAI tool specs in JSON-Schema function format.
+
+        Returns:
+            A list of OpenAI tool dicts of the form
+            ``{"type": "function", "function": spec}``.
+        """
         return [{"type": "function", "function": spec} for spec in tool_specs]
 
     def _parse_tool_calls(self, response) -> list[ToolCall]:
@@ -97,6 +118,14 @@ class _OpenAICompatBase(LLMProvider):
           .id                    — string
           .function.name         — string
           .function.arguments    — JSON-encoded string; parsed to dict here
+
+        Malformed argument JSON is logged and treated as an empty dict.
+
+        Args:
+            response: The raw ChatCompletion response.
+
+        Returns:
+            A list of ``ToolCall`` objects (empty if none were requested).
         """
         raw = response.choices[0].message.tool_calls
         if not raw:
